@@ -101,6 +101,17 @@ Tables will be generated from the wandb API rather than written by hand, reporte
 
 Two RTX 5090s (Blackwell, 32GB each, no NVLink), part-time over 3-6 months. Every design choice is sized to that budget, which is why the from-scratch arm is 150-400M rather than something larger, and why it is a controlled ablation rather than an attempt at a competitive pretrained model.
 
+Measured on this machine with ModernBERT-large (395M) under DDP, bf16, micro batch 1 per GPU ([full write-up](experiments/2026-07-27-p0-throughput/)):
+
+| seq_len | activation ckpt | tokens/s | effective TFLOP/s | MFU | peak mem |
+|---:|:---:|---:|---:|---:|---:|
+| 8,192 | no | 36,625 | 121.3 | 28.9% | 19.60 GiB |
+| 8,192 | yes | 29,451 | 97.5 | 23.3% | 8.94 GiB |
+| 16,384 | yes | 18,464 | 77.9 | 18.6% | 15.05 GiB |
+| 32,768 | yes | 10,481 | 63.2 | 15.1% | 27.63 GiB |
+
+Both 16k and 32k run out of memory without activation checkpointing. At 32k the peak is 27.6 GiB of 31.4 GiB available, so a 1B encoder will not fit at that length on these cards: ModernBERT-large is the long-context trunk and larger models are restricted to 8k ablations. Throughput at 32k is 29% of the 8k rate, which is the real cost of the long-context design and is budgeted for rather than assumed away.
+
 ## Layout
 
 ```

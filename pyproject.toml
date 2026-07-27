@@ -1,0 +1,69 @@
+[project]
+name = "transcribed-transformer"
+version = "0.1.0"
+description = "A universal encoder for transcribed speech, and compliance-QA models built on it"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+
+dependencies = [
+    "torch>=2.7",
+    "transformers>=4.48",
+    "tokenizers>=0.21",
+    "datasets>=3.2",
+    "accelerate>=1.3",
+    "pydantic>=2.10",
+    "pyyaml>=6.0",
+    "wandb>=0.19",
+    "numpy>=2.0",
+    "tqdm>=4.67",
+]
+
+[project.optional-dependencies]
+# Kernels that need compilation against the local toolchain. Installed
+# separately so a broken build never blocks the base environment.
+kernels = ["flash-attn>=2.7"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "types-pyyaml",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tt"]
+
+# Blackwell (sm_120) needs a CUDA 12.8+ build. The default PyPI wheels do not
+# reliably carry sm_120 kernels, so pin the index explicitly.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["transformers.*", "datasets.*", "wandb.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

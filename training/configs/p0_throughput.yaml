@@ -1,0 +1,45 @@
+# P0 gate: measure real training throughput on the dual-5090 machine.
+#
+# The plan estimates the from-scratch arm at ~8-9 days for 400M params over 30B
+# tokens, assuming ~100 TFLOP/s effective across both cards. This config
+# measures whether that assumption holds. If measured throughput comes in
+# materially below it, the from-scratch arm drops to 150M and 20B tokens rather
+# than compromising the matched-corpus design.
+#
+# Not a training run: random token ids, meaningless loss, no checkpoint.
+
+name: p0-throughput-modernbert-large
+arm: arm-p0
+track: track-p           # No real data is touched, but the field is mandatory.
+seed: 0
+
+model:
+  name_or_path: answerdotai/ModernBERT-large
+  attn_implementation: sdpa
+  # ModernBERT alternates attention: every third layer is global, the rest use
+  # a 128-token local window. Charging every layer full quadratic attention
+  # would overstate the work done, and so overstate MFU, at long sequence
+  # length. See hardware.model_flops_per_token.
+  global_every: 3
+  local_window: 128
+
+optim:
+  lr: 1.0e-4
+  weight_decay: 0.01
+  grad_clip: 1.0
+
+seq_len: 8192
+micro_batch_size: 1
+grad_accum_steps: 1
+steps: 40
+mlm_probability: 0.3
+activation_checkpointing: false
+log_every: 5
+
+wandb:
+  project: tt-trunk
+  mode: online
+  notes: >
+    P0 environment validation. Measures steady-state tokens/s and MFU for
+    ModernBERT-large under DDP on 2x RTX 5090, to replace the plan's assumed
+    compute budget with a measured one.
