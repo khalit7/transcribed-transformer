@@ -1,0 +1,39 @@
+# Corpus data is never committed. Loaders download here.
+data/raw/
+data/cache/
+data/processed/
+*.arrow
+*.parquet
+
+# Model weights and checkpoints
+checkpoints/
+outputs/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+
+# wandb
+wandb/
+.wandb/
+
+# Secrets. WANDB_API_KEY and any API keys come from the environment.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
