@@ -34,7 +34,9 @@ Beyond the attention argument, three properties of this task favour an encoder f
 
 **An option-scoring model cannot emit an invalid answer.** Since the permitted answers arrive as input, the natural encoder design scores each supplied option and returns the winner's text verbatim. There is no decoding path that produces a label nobody offered. A generative model has to *learn* to copy one of the strings it was shown, and copying-under-instruction is a behaviour that can fail: emitting the grading rule instead of the label it describes, or echoing the scaffolding it was shown the options in. For the encoder that failure is unreachable; for the decoder it is a thing you measure and hope stays low. How much this matters in practice is [an open question this project measures](#format-validity) rather than assumes.
 
-**Per-line evidence tagging involves no arithmetic.** Asked for supporting line numbers, a generative model must count positions in a long numbered document and copy integers back out, which is a weak spot for small models and gets worse as the document grows. An encoder tags pooled line representations directly: the line either scores above threshold or it does not, and there is no counting step to get wrong. This is [the first thing measured](#p1a-two-cheap-probes-first), because if it turns out small decoders handle it fine, this argument is worth less than it looks.
+**Per-line evidence tagging emits a fixed-size output.** Asked for supporting line numbers, a generative model has to produce a variable-length list of integers over a document that may be tens of thousands of tokens long. [Measured](experiments/2026-07-29-evidence-index-probe/), that degrades sharply with length: format validity falls from 100% at 512 tokens to 38% at 8k for Qwen3-1.7B, and 75% to 25% for Qwen3-8B, with no improvement from the larger model.
+
+The mechanism was not the one expected. Indices never went out of range, not once in 112 generations. Instead the models stop *selecting* lines and start *enumerating* them, emitting contiguous runs counting upward until the output budget is exhausted and the JSON is cut off mid-integer. An encoder tags pooled line representations instead: one decision per line, fixed size, no list to overrun and no counting fallback when selection fails. Notably, **constrained decoding would not fix this** — a grammar forcing integers in range accepts a degenerate enumeration happily, because the failure is semantic rather than syntactic.
 
 **Zero-shot over labels and zero-shot over questions are the same operation.** Both are text the model reads rather than structure it was trained into, so one mechanism covers both.
 
@@ -80,8 +82,7 @@ The best public analogues for this input are **non-commercial**, which matters i
 
 | Source | Why |
 |---|---|
-| [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/) + ICSI | Verbatim spontaneous multi-party speech with audio. Disfluencies preserved, so usable for channel fitting |
-| [AnnoMI](https://github.com/uccollab/AnnoMI) | Expert-annotated counselling dialogues. The closest public proxy for disclosure of health and life-event difficulty |
+| [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/) + ICSI | Verbatim spontaneous multi-party speech with audio, CC BY 4.0. Disfluencies preserved, so usable for channel fitting |
 | [CFPB Consumer Complaint Database](https://www.consumerfinance.gov/data-research/consumer-complaints/) | ~2M real financial complaint narratives with product taxonomy and resolution outcome |
 | [Earnings-21/22](https://arxiv.org/abs/2203.15591) | Financial spoken English, accent diversity |
 | FineWeb-Edu, Ettin's open corpus | Generic text for the arm E control |
@@ -90,12 +91,17 @@ The best public analogues for this input are **non-commercial**, which matters i
 
 | Source | Why |
 |---|---|
+| [AnnoMI](https://github.com/uccollab/AnnoMI) | Expert-annotated counselling dialogues, the closest public proxy for disclosure of health and life-event difficulty. Here **because it has no stated licence at all**, not because it is marked non-commercial: see below |
 | [CallCenterEN](https://arxiv.org/abs/2507.02958) (91,706 conversations, 10,448 audio hours) | By far the closest public analogue to the target distribution |
 | [SPGISpeech 1.0 + 2.0](https://arxiv.org/abs/2508.05554) | ~8,800 hours of professionally transcribed financial speech |
 | [MediaSum](https://arxiv.org/abs/2103.06410) (463.6K transcripts with summaries) | The only large transcript-to-summary corpus; trains the summary head |
 | BETOLD | Human-agent phone dialogues with breakdown labels, as a dissatisfaction proxy |
 
 Per-corpus licences, restrictions and preprocessing live in [`data/DATASHEET.md`](data/DATASHEET.md). Raw corpus data is never committed.
+
+**A worked example of the rule costing something.** AnnoMI was planned as Track P on the assumption it was public domain. Verifying that against the primary source found no licence at all: no `LICENSE` file, no terms in the README, and the CC BY that turns up in searches belongs to the authors' *paper* rather than to the separately-distributed dataset. There is a second problem underneath: the transcripts are of third-party demonstration videos the authors did not create, so they can license their annotations but not the underlying speech.
+
+Ambiguity resolves to NC, so it moved. The cost is not cosmetic — AnnoMI is the best public proxy for **vulnerability**, one of the three priority question families, so the commercially-portable track is now weakest exactly where it can least afford to be. That is the sort of thing the two-track split exists to make visible instead of letting it be discovered after training.
 
 ## Benchmark
 
@@ -131,11 +137,13 @@ This mitigates the problem. It does not eliminate it, and results should be read
 
 ## P1a: two cheap probes first
 
-Before the benchmark is built and before any training recipe is committed to, two measurements that need no labels and take days rather than weeks. Both exist to catch a wrong assumption while it is still cheap to be wrong.
+Before the benchmark is built and before any training recipe is committed to, two measurements that need no labels and take days rather than weeks. Both exist to catch a wrong assumption while it is still cheap to be wrong. Both are done.
 
-**Can a model emit valid evidence line indices at all?** Public transcripts rendered numbered, a small open decoder and a frontier baseline asked for supporting line numbers, scored strictly on format validity, with index validity plotted against transcript length. This is the cheapest decisive test of the copy-and-count claim made [above](#why-an-encoder-and-why-universal). If small decoders handle it comfortably, one of the three structural arguments for the encoder is worth much less than it looks, and it is far better to learn that now than after an arm has been trained on the assumption.
+**Can a model emit valid evidence line indices at all?** [Run](experiments/2026-07-29-evidence-index-probe/) on AMI transcripts truncated to seven length buckets, Qwen3-1.7B and Qwen3-8B on identical items, scored strictly on format validity. Validity degrades sharply with length and does not improve with scale. The predicted failure mode — out-of-range indices — never occurred; the real one is degenerate enumeration overrunning the output budget. The hypothesis was registered before the run and the prediction it got wrong is [written up as wrong](experiments/2026-07-29-evidence-index-probe/#verdict).
 
-**What lengths do the corpora actually have?** Rendered token-length distributions across the ingested corpora, which set the benchmark's length buckets from real data rather than from a guess.
+Still missing: a frontier baseline (no API key at the time) and a second model family, without which "generative models do this" cannot be separated from "Qwen3 does this".
+
+**What lengths do the corpora actually have?** Measured for AMI in [`data/DATASHEET.md`](data/DATASHEET.md): p50 9,630 tokens, p95 17,689, max 29,605, with 62% of meetings exceeding 8k and none exceeding 32k. Benchmark length buckets come from this rather than from a guess.
 
 ## Results
 
