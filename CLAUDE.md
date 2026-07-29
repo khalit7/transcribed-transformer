@@ -48,6 +48,18 @@ Every corpus is assigned to exactly one track, recorded in `data/DATASHEET.md`:
 
 **Never mix tracks in a single training run.** Every headline result is reported on both tracks so the cost of the licence restriction is visible. Adding a corpus without a licence decision is not allowed; use the `add-corpus` skill, which enforces this.
 
+### Data preference hierarchy
+
+The input this project models is **ASR output**: disfluent, full of recognition errors, and systematically unlike written prose. Text that has been cleaned up, or was never spoken, is a substitute for that and is treated as one. Corpus text is preferred in this order, and every `data/DATASHEET.md` entry records which tier it is:
+
+1. **Real ASR output.** Disfluencies, fillers, restarts, misrecognitions, missing punctuation, all of it. The target distribution itself. Use directly.
+2. **Audio we can run ASR over ourselves.** Produces tier 1. The ASR system used becomes part of the datasheet entry, because different recognisers have different error profiles and mixing them silently is a confound.
+3. **Clean written or human-verbatim text.** Only where tiers 1 and 2 are genuinely unavailable *and* the corpus is necessary. Requires the ASR channel model before it is used as training text, and the entry must say why a lower tier was unavoidable.
+
+Human-verbatim transcription is **tier 3, not tier 1**. It is a record of speech, but a transcriber who silently repairs a false start has removed exactly the signal this project exists to model.
+
+A corpus that ships both a human transcript and an ASR transcript is a tier 1 corpus whose human side is **reference data for fitting the channel model**, not training text. Preferring the human side because it is cleaner inverts the whole point.
+
 ### Results are recorded, never estimated
 
 Never write a number into a README, table, docstring or commit message that did not come from an actual run. If a result is not yet measured, write `TBD`. Do not infer, extrapolate or "reasonably estimate" training metrics, throughput or accuracy. A placeholder is honest; a plausible-looking invented number is not.

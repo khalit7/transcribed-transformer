@@ -78,11 +78,23 @@ The channel is validated adversarially, not assumed: a discriminator should stru
 
 The best public analogues for this input are **non-commercial**, which matters if the point is eventual transfer to a commercial setting. So the corpus is split into two tracks, and **every headline result is reported on both**, making the cost of the restriction visible instead of hidden.
 
+### Corpora are ranked by how close they are to ASR, not just by licence
+
+Licence decides whether a corpus *may* be used. A second axis decides how much it is worth: how close its text is to real recogniser output.
+
+1. **Real ASR output**, disfluencies and misrecognitions intact. Used directly.
+2. **Audio we can run ASR over ourselves**, producing tier 1. The recogniser used is recorded, since error profiles differ and mixing them silently is a confound.
+3. **Clean written or human-verbatim text.** Only where nothing better exists, and only after the channel model has been applied.
+
+**Human-verbatim transcription is tier 3, not tier 1**, which is the counter-intuitive part. It is a faithful record of speech, but a transcriber who quietly repairs a false start has deleted the exact signal this project models. Applying that rule caught a mistake already made here: AMI was ingested from its manual annotations, while a tier 1 ASR layer sat unopened in a second archive of the same distribution.
+
 **Track P — permissive, commercially portable**
 
 | Source | Why |
 |---|---|
-| [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/) + ICSI | Verbatim spontaneous multi-party speech with audio, CC BY 4.0. Disfluencies preserved, so usable for channel fitting |
+| [Taskmaster-1 + 2](https://github.com/google-research-datasets/Taskmaster) | 22,807 **two-party spoken** dialogues, 8.1M tokens, CC BY 4.0: crowdworker as customer, trained call-centre operator as assistant. The right interaction shape at scale, and the only corpus here with advisor/customer roles. Short (p50 321 tokens) and no audio |
+| [HarperValleyBank](https://arxiv.org/abs/2010.13929) | 1,446 dyadic **consumer banking** calls with audio and agent/caller role labels, CC BY 4.0. Small and scripted, but the closest permissive domain match and channel-fittable |
+| [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/) + ICSI | The only **paired** corpus here: ships real 2007-era ASR output *and* the human transcript of the same speech, both CC BY 4.0. That pairing is what the ASR channel model is fitted from |
 | [CFPB Consumer Complaint Database](https://www.consumerfinance.gov/data-research/consumer-complaints/) | ~2M real financial complaint narratives with product taxonomy and resolution outcome |
 | [Earnings-21/22](https://arxiv.org/abs/2203.15591) | Financial spoken English, accent diversity |
 | FineWeb-Edu, Ettin's open corpus | Generic text for the arm E control |
@@ -98,6 +110,10 @@ The best public analogues for this input are **non-commercial**, which matters i
 | BETOLD | Human-agent phone dialogues with breakdown labels, as a dissatisfaction proxy |
 
 Per-corpus licences, restrictions and preprocessing live in [`data/DATASHEET.md`](data/DATASHEET.md). Raw corpus data is never committed.
+
+**Track P has to carry the interaction shape, not just the licence.** The first corpus ingested here was AMI, which is 4-5 speaker meetings: excellent for disfluency and channel work, structurally wrong for two-party advisor/customer calls. A permissive track made only of meetings, written complaints and web text would have compared badly against the non-commercial track for reasons of corpus *shape* rather than licence, which would have made the two-track comparison meaningless. Taskmaster and HarperValleyBank exist in the table above to close that gap: dyadic spoken service interaction at scale, and dyadic banking calls with audio, both CC BY 4.0.
+
+It is closed only partly, and the measurements say where. AMI spans 1,375–29,605 tokens per transcript; Taskmaster spans 7–2,389. Those ranges barely overlap, so **Track P has dyadic conversation and it has long context, but not both at once.** Since a *case* is several calls rather than one, short real dialogues compose into case-scale input without truncation or invented filler, which is how the benchmark gets there. But no permissively-licensed corpus here is a single long two-party call, and that is stated rather than papered over.
 
 **A worked example of the rule costing something.** AnnoMI was planned as Track P on the assumption it was public domain. Verifying that against the primary source found no licence at all: no `LICENSE` file, no terms in the README, and the CC BY that turns up in searches belongs to the authors' *paper* rather than to the separately-distributed dataset. There is a second problem underneath: the transcripts are of third-party demonstration videos the authors did not create, so they can license their annotations but not the underlying speech.
 
