@@ -22,6 +22,14 @@ wandb/
 .env.*
 !.env.example
 
+# Backstop only. Internal reference material must live outside the repo
+# entirely, not here: an ignore rule is one `git add -f` or one careless
+# edit away from failing, and an ignored file is invisible to the diff
+# that confidentiality-check reads.
+/context.md
+*.private.md
+/private/
+
 # Python
 __pycache__/
 *.py[cod]

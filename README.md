@@ -10,11 +10,13 @@ In regulated industries, conversations between staff and customers are recorded,
 
 The task has a specific and unusual shape:
 
-- **Input is long.** A single transcript runs to ~32k tokens. A *case* is the whole interaction with one customer: several transcripts, judged together.
-- **Output is short and structured.** For each question: an answer (`pass | fail | partial_pass | NA`), the set of transcript line numbers that constitute evidence, and a short justification.
-- **Questions are open-ended.** New questions are written all the time. The model receives the question text and the definitions of its four answers as input; it cannot rely on a fixed, trained-in label set.
+- **Input is long, but not uniformly.** A single transcript can run to ~32k tokens, while a great many are far shorter. A *case* is the whole interaction with one customer: several transcripts, judged together.
+- **Output is short and structured.** For each question: one answer, the set of transcript line numbers that constitute evidence, and a short justification.
+- **Questions are open-ended, and so are their answers.** New questions are written all the time, by different organisations. The model receives the question text, the permitted answers, and the grading rule for each one, all as input. It cannot rely on a fixed, trained-in label set, because there isn't one: the same underlying judgement is variously expressed as `{yes, no}`, as `{pass, partial pass, fail, NA}`, or as opaque codes, and which side of the judgement is the interesting one varies too.
 - **Case semantics differ per question.** Some questions pass if *any* call satisfies them ("was the customer's name established"). Others pass only if *every* call does ("did the advisor greet the customer appropriately"). The model has to infer which from the question.
 - **The text is speech.** ASR output, full of disfluencies, fillers, restarts, self-corrections and recognition errors. Not written prose.
+
+Scope: **speech transcripts only.** The same class of system is often asked about chat logs, scanned documents and emails. Those are excluded here because the hypotheses below are specifically about ASR distribution and disfluency, which do not apply to written or OCR'd input. Generalising off that distribution is a later question, and a good test of the trunk, but it is not what this project is measuring.
 
 The standard approach is to prompt a large causal language model per transcript and aggregate. It works. This project asks whether something meaningfully better is available.
 
@@ -28,7 +30,15 @@ Hypothesis 1 has external support. [Ettin](https://arxiv.org/abs/2507.11412) is,
 
 ## Why an encoder, and why "universal"
 
-A single encoder that genuinely understands transcribed speech is more useful than a single task model, because other things can be built on it. Compliance QA is one consumer. **Anonymisation** is another: PII span detection over transcripts is a prerequisite for using recorded conversations as training data at all, and it is a completely different task shape on the same input distribution.
+Beyond the attention argument, three properties of this task favour an encoder for structural reasons rather than empirical ones. They are worth stating separately because they hold by construction, not on average.
+
+**An option-scoring model cannot emit an invalid answer.** Since the permitted answers arrive as input, the natural encoder design scores each supplied option and returns the winner's text verbatim. There is no decoding path that produces a label nobody offered. A generative model has to *learn* to copy one of the strings it was shown, and copying-under-instruction is a behaviour that can fail: emitting the grading rule instead of the label it describes, or echoing the scaffolding it was shown the options in. For the encoder that failure is unreachable; for the decoder it is a thing you measure and hope stays low. How much this matters in practice is [an open question this project measures](#format-validity) rather than assumes.
+
+**Per-line evidence tagging involves no arithmetic.** Asked for supporting line numbers, a generative model must count positions in a long numbered document and copy integers back out, which is a weak spot for small models and gets worse as the document grows. An encoder tags pooled line representations directly: the line either scores above threshold or it does not, and there is no counting step to get wrong. This is [the first thing measured](#p1a-two-cheap-probes-first), because if it turns out small decoders handle it fine, this argument is worth less than it looks.
+
+**Zero-shot over labels and zero-shot over questions are the same operation.** Both are text the model reads rather than structure it was trained into, so one mechanism covers both.
+
+Beyond compliance QA, a single encoder that genuinely understands transcribed speech is more useful than a single task model, because other things can be built on it. **Anonymisation** is the second consumer: PII span detection over transcripts is a prerequisite for using recorded conversations as training data at all, and it is a completely different task shape on the same input distribution.
 
 The universality claim is only credible if it is demonstrated rather than asserted, so the plan puts two unrelated heads on one frozen trunk and reports both.
 
@@ -38,13 +48,23 @@ Five arms. Arms A and B produce a model; arm E answers the scientific question; 
 
 | Arm | What | Why |
 |---|---|---|
-| **A** | Adapted native encoder ([Ettin-1B](https://huggingface.co/jhu-clsp/ettin-encoder-1b) / [ModernBERT-large](https://arxiv.org/abs/2412.13663)): domain-adaptive MLM on transcripts, context extension 8k→32k, [GLiClass](https://arxiv.org/abs/2508.07662)-style joint encoding of question and transcript, answer + per-line evidence heads, learned case aggregator | Primary deliverable |
+| **A** | Adapted native encoder ([Ettin-1B](https://huggingface.co/jhu-clsp/ettin-encoder-1b) / [ModernBERT-large](https://arxiv.org/abs/2412.13663)): domain-adaptive MLM on transcripts, context extension 8k→32k, [GLiClass](https://arxiv.org/abs/2508.07662)-style joint encoding of question, answer options and transcript in one forward pass; **option-scoring** answer head plus per-line evidence head, learned case aggregator | Primary deliverable |
 | **B** | Encoder-decoder ([T5Gemma 2](https://arxiv.org/abs/2512.14856) 1B-1B): UL2/PrefixLM adaptation, then multi-task answer + evidence + generated summary | Full stack, and the direct test of encoder-decoder adaptation on long context |
 | **C** | Bidirectional-prefix decoder ([LLM2Vec](https://arxiv.org/abs/2404.05961)-style mask flip on a 1-4B causal model) | The cheap conversion. Ettin predicts it loses to a native encoder; [T5Gemma](https://arxiv.org/abs/2504.06225) predicts adaptation works. Resolving that on this task is worth knowing either way |
-| **D** | Baselines: frontier API model with a faithful prompt pipeline, size-matched causal decoder SFT'd on the same data, off-the-shelf zero-shot encoders | Nothing above means anything without these |
+| **D** | Baselines: frontier API model with a faithful prompt pipeline, size-matched causal decoder SFT'd on the same data, off-the-shelf zero-shot encoders, and a majority-class predictor | Nothing above means anything without these. The majority-class row is cheap insurance: if the benchmark's answer distribution turns out skewed, accuracy will look strong for no reason, and this is the row that shows it |
 | **E** | **From-scratch controlled ablation.** A ~150-400M encoder trained twice under a [biphasic CLM→MLM](https://arxiv.org/abs/2507.00994) recipe, on token-matched corpora: generic web text vs transcript-heavy text. Everything else held identical | The only arm that cleanly isolates hypothesis 2. Every adapted arm confounds it with the base model's pretraining |
 
 Arm E is where the actual science is. It is also the arm most likely to produce a result worth publishing, independent of whether the deliverable arms win.
+
+If arms have to be cut for time, **C goes first and E never goes.** B stays ahead of C because the written justification is what a human reviewer actually reads: a system that produces a correct verdict it cannot explain is not a replacement for one that explains itself, whatever its accuracy.
+
+### The answer head has no fixed label set
+
+Worth spelling out, because it is the constraint that shapes the architecture. The obvious design, a softmax over `pass | fail | partial_pass | NA`, cannot work: answer vocabularies vary in arity, in wording, and in which side of the judgement carries the evidence, and a question written after training can use a vocabulary no one has seen.
+
+So the answer head **scores the options it is given**. Question, description, and each option's label and grading rule are encoded jointly with the transcript, one forward pass, one score per supplied option, softmax over that set alone, and the winning option's text is returned verbatim. Variable arity, nothing trained in, and the same mechanism whether a question offers two answers or five.
+
+This is the shape [GLiClass](https://arxiv.org/abs/2508.07662) already demonstrates for zero-shot classification with label text as input, applied to a setting where the label set genuinely changes per example rather than per dataset.
 
 ### Bridging written text to ASR text
 
@@ -79,9 +99,27 @@ Per-corpus licences, restrictions and preprocessing live in [`data/DATASHEET.md`
 
 ## Benchmark
 
-No public benchmark exists for compliance QA over transcripts, so one has to be built: multi-call cases, a question bank in the production shape (question plus explicit definitions of all four answers), held-out questions never seen in training, evidence labelled as line indices. Vulnerability questions are structured on the [FCA's four drivers](https://www.fca.org.uk/publications/finalised-guidance/guidance-firms-fair-treatment-vulnerable-customers) (health, life events, resilience, capability) so the taxonomy is a real regulatory one rather than an invented one.
+No public benchmark exists for compliance QA over transcripts, so one has to be built: multi-call cases, a question bank in the real shape (question, description, and the permitted answers each with its grading rule), evidence labelled as line indices. Vulnerability questions are structured on the [FCA's four drivers](https://www.fca.org.uk/publications/finalised-guidance/guidance-firms-fair-treatment-vulnerable-customers) (health, life events, resilience, capability) so the taxonomy is a real regulatory one rather than an invented one.
 
-Scoring covers the answer (accuracy, macro-F1), the evidence (set F1, plus sufficiency and comprehensiveness, to catch right answers reached through wrong evidence), and the summary (faithfulness to the cited lines).
+Four design decisions do most of the work, and each of them is cheap now and expensive to retrofit after labelling.
+
+**Answer vocabularies vary across questions.** Two-way, three-way and four-way; different spellings of the same idea; one that uses opaque codes rather than words; and at least one where the *pass*-side label is the evidence-bearing one. A question bank sharing a single label set cannot tell a model that reads its options apart from one that memorised them during training, and telling those apart is the entire zero-shot claim. The polarity variation earns its place separately: if evidence always sits on the failing side, a model can learn "found something → fail" and score well without reading the options at all.
+
+**The held-out split is by question family, never by case.** Whole families and themes are held out, not individual questions drawn from a family that stays in training: questions within a family are frequently near paraphrases, so a finer split leaks. Holding out *cases* for questions the model trained on would measure memorisation and would read as success. Seen and unseen criteria are reported as separate columns and **the unseen column is the headline**.
+
+**Criterion diversity over example count.** Many questions with few cases each, rather than few questions with many. Generality over questions is what is being measured, so the labelling budget buys breadth.
+
+**Cases are length-bucketed, not uniformly maximal.** Real transcript collections vary enormously in length, and a benchmark where every case is ~32k would misrepresent both accuracy and cost. Cases are binned by rendered token length and results reported per bucket. The [measured throughput](#hardware) makes the cost side concrete: 32k runs at 29% of the 8k token rate, so the mix of operating points dominates the compute budget. The model must *support* 32k; it will usually run well below it.
+
+### Scoring
+
+The answer (accuracy and macro-F1 against that question's own vocabulary, with a majority-class baseline that any arm must beat), the evidence, the summary (faithfulness to the cited lines, with the judge model version pinned, since judge drift invalidates every earlier score invisibly), and format validity.
+
+<a id="format-validity"></a>**Format validity is scored as a first-class metric**, separately from judgement. An answer that is byte-equal to a permitted value scores full credit; one that is only recoverable by matching a grading rule back to the label it describes scores partial credit **and counts as a failure**; one that is unrecoverable scores zero. Evidence must be a JSON array of integers, in range, de-duplicated, ascending, and empty rather than a sentinel when nothing was found.
+
+This is scored strictly and reported openly because a repair layer downstream of the model makes the raw error rate invisible, and because the encoder arms are structurally immune to a failure the generative baselines have to earn their way out of. How large that gap actually is on public data is a question this benchmark answers rather than assumes.
+
+**Evidence is scored as precision against a partial key**, plus sufficiency and comprehensiveness from the rationale-faithfulness literature. Set-level recall and F1 are reported only where a key is marked exhaustive. Human evidence keys are usually not: a question often has several genuinely correct supporting lines and an annotator marks the ones they noticed, so scoring recall against such a key punishes a model for finding a line the annotator missed and understates every system equally, baselines included.
 
 ### The limitation this project has to be honest about
 
@@ -91,11 +129,21 @@ What is done about it, in order of importance: the **human-annotated gold slice 
 
 This mitigates the problem. It does not eliminate it, and results should be read with that in mind.
 
+## P1a: two cheap probes first
+
+Before the benchmark is built and before any training recipe is committed to, two measurements that need no labels and take days rather than weeks. Both exist to catch a wrong assumption while it is still cheap to be wrong.
+
+**Can a model emit valid evidence line indices at all?** Public transcripts rendered numbered, a small open decoder and a frontier baseline asked for supporting line numbers, scored strictly on format validity, with index validity plotted against transcript length. This is the cheapest decisive test of the copy-and-count claim made [above](#why-an-encoder-and-why-universal). If small decoders handle it comfortably, one of the three structural arguments for the encoder is worth much less than it looks, and it is far better to learn that now than after an arm has been trained on the assumption.
+
+**What lengths do the corpora actually have?** Rendered token-length distributions across the ingested corpora, which set the benchmark's length buckets from real data rather than from a guess.
+
 ## Results
 
 `TBD`. Nothing has been run yet.
 
-Tables will be generated from the wandb API rather than written by hand, reported on both licence tracks, split by seen and held-out questions, with inference cost alongside quality. Negative results are reported the same way as positive ones; if the architecture hypothesis turns out to be wrong, that is the finding.
+Tables will be generated from the wandb API rather than written by hand, reported on both licence tracks, split by seen and held-out criteria and by length bucket. **Cost is a gate, not a footnote:** an arm has to be at least as cheap per case as the baseline it beats before the result is written up as a win, because efficiency is half the reason for preferring a small encoder over a prompted frontier model in the first place.
+
+Negative results are reported the same way as positive ones; if the architecture hypothesis turns out to be wrong, that is the finding.
 
 ## Hardware
 

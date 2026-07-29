@@ -37,6 +37,8 @@ Everything here is built from public datasets and public literature. When descri
 
 If a change would require internal knowledge to justify, it does not belong here.
 
+**Internal source material never enters the working tree, even untracked.** Not in a scratch file, not in a notes file, not "temporarily". An untracked file is one `git add -A` away from public, and it is invisible to the diff that `confidentiality-check` reads, so the one control that would catch it never sees it. Internal reference documents live outside the repository; only their generic, derived conclusions come in, and each one has to survive the justification test above on its own. The `.gitignore` entries for this are a backstop, not the control.
+
 ### Dataset licences
 
 Every corpus is assigned to exactly one track, recorded in `data/DATASHEET.md`:

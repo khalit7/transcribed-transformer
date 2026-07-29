@@ -45,6 +45,8 @@ source and citation; licence with the URL you verified it from; **track**; redis
 
 The "human-verbatim vs ASR output" field matters more than it looks. Corpora with both audio and human transcripts are the only ones that can calibrate the ASR channel model, so flag them.
 
+**Record the token-length distribution**, not just a total: min, p50, p90, p95, p99 and max over rendered transcripts, using the project tokenizer and `Transcript.render()` so the numbers describe what a model actually receives. A single total hides the shape, and the shape is what decides the benchmark's length buckets, the training sequence length, and how much of the compute budget the long tail consumes. Note explicitly if the distribution is multi-modal, which is common when a corpus mixes short and long recordings, since a p50 in a valley between two modes describes nothing.
+
 ## 4. Test
 
 A round-trip test in `tests/` against a small committed fixture (a handful of records, licence permitting, otherwise synthetic records in the same shape). Assert the canonical schema validates, line indices are contiguous from the expected base, speaker labels are populated, and the track field is set.
@@ -54,3 +56,4 @@ A round-trip test in `tests/` against a small committed fixture (a handful of re
 - Print a few records and read them. Check that turns are segmented as expected and disfluencies survived.
 - Compare the token count against what the source claims. A large discrepancy means the loader is dropping something.
 - Confirm nothing under the raw cache path is tracked by git.
+- Check the length distribution against the datasheet entry and sanity-check both tails: a p99 far above p95 means the tail is worth designing for, and a minimum near zero usually means empty records the loader should drop rather than emit.
