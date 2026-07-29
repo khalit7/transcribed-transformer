@@ -46,7 +46,16 @@ Everything else below is the planned set, recorded with the licence position est
 - **Why**: verbatim spontaneous multi-party speech with disfluencies preserved
 - **Audio available**: yes, though not downloaded by the loader. This is the only Track P corpus pairing audio with human verbatim transcripts, so it is the reference data for ASR channel-model fitting.
 - **Transcripts**: **both**. Human verbatim orthographic (manual archive) *and* real ASR output (auto archive). This is what makes AMI the single most valuable corpus here despite its small size and wrong interaction shape.
-- **Size measured 2026-07-29** (manual variant): 171 meetings, 83,868 turns, 5,685,219 characters, **1,674,833 tokens** (ModernBERT-large tokenizer, over `Transcript.render()`). ASR-variant token count: TBD, and expected to differ, since a recogniser drops and inserts words.
+- **Size measured 2026-07-29**, ModernBERT-large tokenizer over `Transcript.render()`:
+
+  | Variant | Meetings | Turns | Tokens |
+  |---|---:|---:|---:|
+  | `asr` (tier 1, default) | 126 | 102,014 | **1,280,265** |
+  | `manual` (tier 3, reference) | 171 | 83,868 | 1,674,833 |
+
+  **The ASR layer covers fewer meetings**: 126, all of which have a manual counterpart, with 45 manual-only meetings having no ASR. So the two totals are not comparable directly, and the honest comparison is on the 126 paired meetings: **1,280,265 ASR tokens against 1,219,423 manual, a ratio of 1.05**, and **102,014 ASR turns against 58,199, a ratio of 1.75**. ASR produces slightly *more* tokens despite emitting no punctuation, and far more turns because its segmentation is finer than a human transcriber's.
+- **ASR-variant token-length distribution per meeting**: min 1,699 / p25 6,607 / **p50 9,912** / p75 12,417 / p90 16,130 / p95 19,202 / p99 26,136 / max 29,749. Exceeding 8k: **67.5%**; 16k: 10.3%; 32k: **0.0%**. Slightly longer-tailed than the manual layer, consistent with the token ratio above.
+- **126 paired meetings is what the channel model is fitted from.** That is the entire supply of Track P reference/hypothesis pairs, and it sets the ceiling on how well the channel can be estimated.
 - **Token-length distribution per meeting**: min 1,375 / p25 6,319 / **p50 9,630** / p75 12,550 / p90 15,487 / p95 17,689 / p99 23,641 / max 29,605. **Unimodal**, single peak around 8–11k, right-skewed. Fraction exceeding 4k: 88.9%; 8k: **62.0%**; 16k: 8.8%; 32k: **0.0%**.
 - **Consequences**: the whole corpus fits under 32k, so no meeting needs truncation or chunking. But 62% exceed 8k, so an 8k context window would truncate the majority of meetings — this corpus alone argues for the context-extension phase rather than making it optional.
 - **Preprocessing the loader applies**: NXT per-speaker word streams resolved against per-speaker segment files, then merged across speakers by `(start time, speaker, segment id)` to produce one chronological turn sequence. Words kept verbatim including filled pauses, repetitions and truncations. Non-lexical annotation markup (`vocalsound`, `disfmarker`, `gap`, `transformerror`) is excluded from the text because it is annotation *about* speech rather than spoken words and no ASR system emits it; counts are recorded per transcript in `meta`. Corpus-wide excluded: 27,395 disfmarker, 27,073 vocalsound, 5,125 gap, 30 transformerror. Segments containing only markup are dropped rather than emitted as empty lines.
