@@ -78,6 +78,75 @@ class OptimConfig(BaseModel):
     grad_clip: float = 1.0
 
 
+class Objective(StrEnum):
+    """What the model is trained to do. Selects a loss, not a training loop.
+
+    Adding one means registering a new objective, never editing the loop. If a
+    new arm needs the loop changed, the abstraction is wrong.
+    """
+
+    MLM = "mlm"
+    """Masked language modelling. Arms A and E phase 2."""
+
+    CLM = "clm"
+    """Causal language modelling. Arm E phase 1 of the biphasic schedule."""
+
+
+class ScheduleConfig(BaseModel):
+    """Learning-rate schedule."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["cosine", "linear", "constant"] = "cosine"
+    warmup_steps: int = 0
+    min_lr_ratio: float = Field(
+        default=0.1, description="Floor as a fraction of peak lr, so decay does not reach zero."
+    )
+
+
+class CheckpointConfig(BaseModel):
+    """Checkpointing policy.
+
+    Runs here are measured in days on a machine that is also someone's desktop,
+    so resuming cleanly is a requirement rather than a nicety.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    dir: Path = Path("checkpoints")
+    every_steps: int = Field(default=1000, description="0 disables periodic checkpoints.")
+    keep_last: int = Field(default=2, description="Older checkpoints are deleted. 0 keeps all.")
+    resume: bool = Field(
+        default=True,
+        description="Resume from the latest checkpoint in dir if one exists. A long run that "
+        "silently restarts from scratch after a crash wastes days before anyone notices.",
+    )
+
+
+class DataConfig(BaseModel):
+    """Where training tokens come from.
+
+    ``sources`` names loaders by key; the mixing weights decide sampling
+    proportions. Track is enforced at load time, since a mixed-track batch makes
+    a model research-only and the contamination is invisible afterwards.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    sources: dict[str, float] = Field(
+        default_factory=dict, description="Source name to mixing weight. Weights are normalised."
+    )
+    cache_dir: Path = Path("data/raw")
+    variant: str | None = Field(
+        default=None, description="Transcript layer where a loader offers one, e.g. 'asr'."
+    )
+    channel_version: str | None = Field(
+        default=None,
+        description="ASR channel artifact applied to this data. Comparing models trained "
+        "under different channel versions is a silent confound, so it is recorded.",
+    )
+
+
 class RunConfig(BaseModel):
     """A complete run. Logged to wandb in full, so a run is reproducible from wandb alone."""
 
@@ -91,6 +160,10 @@ class RunConfig(BaseModel):
     model: ModelConfig
     optim: OptimConfig = OptimConfig()
     wandb: WandbConfig
+    objective: Objective = Objective.MLM
+    schedule: ScheduleConfig = ScheduleConfig()
+    checkpoint: CheckpointConfig = CheckpointConfig()
+    data: DataConfig = DataConfig()
 
     seq_len: int = 8192
     micro_batch_size: int = 1

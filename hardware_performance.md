@@ -41,3 +41,57 @@ without anything else looking wrong. **Read the Warnings section of each run fir
 - GPU 1 peaked at 90 °C.
 - CPU peaked at 96 °C. On AMD parts this reading is Tctl, which carries an offset and runs hotter than the true junction temperature, so treat it as a trend to watch rather than a fault.
 - **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## resume-check (train)
+
+- **Started**: 2026-07-29T18:35:19+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 2
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 6 / 6 | 1.7 / 1.7 | 48 / 48 | 36 / 36 | 195 / 195 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 19 / 19 | 1.7 / 1.7 | 50 / 50 | 49 / 49 | 1710 / 1710 | 0% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 13.4 | 13.4 |
+| Load average (1m) | 0.1 | 0.1 |
+| CPU temp °C | 72 | 72 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## resume-check (train)
+
+- **Started**: 2026-07-29T18:35:21+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 2
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 0 / 0 | 3.8 / 3.8 | 50 / 50 | 94 / 94 | 2955 / 2955 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 100 / 100 | 3.8 / 3.8 | 55 / 55 | 113 / 113 | 2865 / 2865 | 92% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 15.6 | 15.6 |
+| Load average (1m) | 0.4 | 0.4 |
+| CPU temp °C | 85 | 85 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
