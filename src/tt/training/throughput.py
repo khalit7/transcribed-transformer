@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
@@ -26,6 +27,8 @@ from torch.nn.parallel import DistributedDataParallel
 
 from tt.training import hardware
 from tt.training.config import RunConfig
+from tt.training.hardware import rank, world_size
+from tt.training.hwmon import HardwareMonitor
 from tt.training.tracking import Run, ThroughputMeter, memory_metrics
 
 
@@ -112,7 +115,22 @@ def run(cfg: RunConfig) -> int:
         "measured/tokens_per_step": tokens_per_step,
     }
 
-    with Run(cfg, extra_config=extra) as wandb_run:
+    # Rank 0 only: every rank sees the same cards, so sampling on each would
+    # multiply the nvidia-smi calls and write the same section several times.
+    monitor = (
+        HardwareMonitor(
+            run_name=f"{cfg.name} @ {cfg.seq_len} tokens"
+            + (" +ckpt" if cfg.activation_checkpointing else ""),
+            note=(
+                f"{cfg.model.name_or_path}, {n_params / 1e6:.0f}M params, "
+                f"micro batch {cfg.micro_batch_size}, world size {world_size()}"
+            ),
+        )
+        if rank() == 0
+        else None
+    )
+
+    with Run(cfg, extra_config=extra) as wandb_run, monitor or nullcontext():
         if wandb_run.url:
             _log(f"wandb: {wandb_run.url}")
 
@@ -152,6 +170,10 @@ def run(cfg: RunConfig) -> int:
         for k, v in sorted(memory_metrics().items()):
             _log(f"{k:<15} {v:>12.2f} GiB")
         _log("=" * 62)
+
+    if monitor is not None:
+        path = monitor.append_report()
+        _log(f"hardware report appended to {path}")
 
     if ws > 1:
         dist.destroy_process_group()

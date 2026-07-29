@@ -17,6 +17,7 @@ dependencies = [
     "wandb>=0.19",
     "numpy>=2.0",
     "tqdm>=4.67",
+    "psutil>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +31,7 @@ dev = [
     "ruff>=0.9",
     "mypy>=1.14",
     "types-pyyaml",
+    "types-psutil",
 ]
 
 [build-system]

@@ -195,6 +195,8 @@ eval/         harness, results tables, faithfulness metrics
 experiments/  one directory per run: hypothesis, config, result, verdict
 ```
 
+`hardware_performance.md` is appended to by every run, recording GPU and CPU utilisation, temperature, clocks, power and throttling. It exists for what a loss curve cannot show: whether the machine sustained full speed. It distinguishes hitting a **power cap**, which is the expected steady state at full load and extrapolates fine, from **thermal** limiting, which is a cooling fault that worsens as a multi-day run heat-soaks.
+
 ## Notes
 
 This is independent research on public data. It is motivated by a class of problem that is common in regulated industries, and it contains no proprietary data, systems or findings from any employer.
