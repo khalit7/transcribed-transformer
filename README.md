@@ -4,6 +4,16 @@ Research towards a **universal encoder for transcribed speech**, and task models
 
 > **Status: early.** The design is settled, the implementation is not. No results yet. Every number in this README is `TBD` until it comes from a run, and will stay that way rather than being filled in with an estimate.
 
+## TLDR; — context and motivation
+
+Compliance question answering over call transcripts is a task where reported results and deployed results tend to diverge. Models that look strong on benchmarks built from clean written text do noticeably worse once the input is genuine ASR output, and the usual response is to reach for a frontier model behind an API. That works. It is also an expensive answer to a task that ought to be tractable at a fraction of the size, and it treats the symptom rather than the cause.
+
+The wager here is that the cause is the input itself. **Transcribed speech is disfluent, and it is long**, and both properties are unlike the written text these models were pretrained and benchmarked on. Fillers, restarts, repairs and recognition errors are not noise to be cleaned away before the real work starts; they *are* the distribution. And a compliance judgement usually depends on the whole conversation rather than a prefix of it, which is a poor fit for causal attention.
+
+This repository exists to put numbers on that rather than assert it, and to train models that work on ASR-mangled text instead of in spite of it.
+
+There is already one measurement pointing that way, made here on public data: asked to cite supporting line numbers, a small open model scores 38% on human transcripts and **0% on ASR of the same speech**, at the same lengths from the same corpus. Difficulty estimates taken from clean transcripts are optimistic.
+
 ## The problem
 
 In regulated industries, conversations between staff and customers are recorded, transcribed, and reviewed against compliance questions. The questions vary in kind and are usually written by the reviewing organisation: *did the advisor communicate clearly*, *did the customer show signs of vulnerability*, *did the customer make a complaint*, *was it handled properly*.
