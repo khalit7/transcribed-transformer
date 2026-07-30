@@ -39,7 +39,7 @@ def _cfg(**kw: object) -> RunConfig:
         "name": "test-run",
         "arm": Arm.E,
         "track": Track.P,
-        "model": ModelConfig(name_or_path="tiny"),
+        "model": ModelConfig(name_or_path="tiny", mask_token_id=50284, vocab_size=1000),
         "wandb": WandbConfig(project="tt-scratch", mode="disabled"),
         "optim": OptimConfig(lr=1e-3),
         "steps": 100,
@@ -89,16 +89,55 @@ def test_lr_is_a_pure_function_of_step() -> None:
 # --- objectives -------------------------------------------------------------
 
 
-def test_mlm_masks_only_some_positions() -> None:
+def test_mlm_scores_only_selected_positions() -> None:
     cfg = _cfg(mlm_probability=0.3)
     ids = torch.randint(0, 100, (2, 512))
     batch = mlm_batch(ids, cfg)
-    masked = (batch["labels"] != -100).float().mean().item()
-    assert 0.15 < masked < 0.45, "roughly the configured rate"
-    assert torch.equal(batch["input_ids"], ids), "inputs are not modified"
+    scored = (batch["labels"] != -100).float().mean().item()
+    assert 0.15 < scored < 0.45, "roughly the configured rate"
 
 
-def test_unmasked_positions_carry_no_loss() -> None:
+def test_mlm_actually_corrupts_the_input() -> None:
+    """The bug this guards against, and it is silent.
+
+    Selecting positions but leaving the tokens in place hands the model the
+    answer in its own input. It learns to copy, the loss collapses toward zero,
+    and it reads as fast convergence. A multi-day run would finish having learned
+    nothing. This was measured at 0.015 MLM loss after 10 steps before the fix.
+    """
+    cfg = _cfg(mlm_probability=0.5)
+    ids = torch.full((4, 512), 7, dtype=torch.long)
+    batch = mlm_batch(ids, cfg)
+    assert not torch.equal(batch["input_ids"], ids), "input must differ from the target"
+
+    scored = batch["labels"] != -100
+    changed = batch["input_ids"] != ids
+    # Corruption happens only where the model is being scored.
+    assert not (changed & ~scored).any()
+    # ~90% of scored positions are corrupted (80% mask + 10% random).
+    assert changed.sum().item() / max(1, scored.sum().item()) > 0.75
+
+
+def test_mlm_uses_the_mask_token_for_most_corruptions() -> None:
+    cfg = _cfg(mlm_probability=1.0)
+    ids = torch.full((8, 256), 7, dtype=torch.long)
+    inputs = mlm_batch(ids, cfg)["input_ids"]
+    mask_id = cfg.model.mask_token_id
+    assert mask_id is not None
+    as_mask = (inputs == mask_id).float().mean().item()
+    assert 0.7 < as_mask < 0.9, "roughly the 80% mask share"
+    untouched = (inputs == 7).float().mean().item()
+    assert 0.03 < untouched < 0.2, "the ~10% left alone, so masks are not the only input seen"
+
+
+def test_mlm_refuses_without_a_mask_token() -> None:
+    """Failing loudly beats training an identity task for days."""
+    cfg = _cfg(model=ModelConfig(name_or_path="tiny"))
+    with pytest.raises(ValueError, match="mask_token_id"):
+        mlm_batch(torch.randint(0, 100, (1, 8)), cfg)
+
+
+def test_unselected_positions_carry_no_loss() -> None:
     batch = mlm_batch(torch.randint(0, 100, (1, 256)), _cfg(mlm_probability=0.0))
     assert (batch["labels"] == -100).all()
 

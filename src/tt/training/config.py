@@ -62,6 +62,13 @@ class ModelConfig(BaseModel):
     name_or_path: str
     attn_implementation: str = "sdpa"
 
+    # Tokenizer facts the MLM objective needs. Populated from the tokenizer by
+    # the launcher rather than hand-written, and required for MLM: without a
+    # mask token the corruption step silently does nothing and the model trains
+    # on an identity task that looks like it is converging beautifully.
+    mask_token_id: int | None = None
+    vocab_size: int | None = None
+
     # Attention pattern, needed for honest MFU accounting. ModernBERT-style
     # models make every ``global_every``-th layer global and the rest local.
     global_every: int | None = None

@@ -95,3 +95,327 @@ without anything else looking wrong. **Read the Warnings section of each run fir
 ### Warnings
 
 - **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:32:20+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 2
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 16 / 16 | 1.7 / 1.7 | 33 / 33 | 38 / 38 | 2542 / 2542 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 6 / 6 | 1.7 / 1.7 | 36 / 36 | 58 / 58 | 2460 / 2460 | 0% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 9.1 | 9.1 |
+| Load average (1m) | 1.7 | 1.7 |
+| CPU temp °C | 65 | 65 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:32:36+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 1
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 0 / 0 | 0.9 / 0.9 | 32 / 32 | 23 / 23 | 195 / 195 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 0 / 0 | 0.0 / 0.0 | 35 / 35 | 19 / 19 | 195 / 195 | 0% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 7.0 | 7.0 |
+| Load average (1m) | 1.6 | 1.6 |
+| CPU temp °C | 61 | 61 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:32:38+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 1
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 10 / 10 | 4.5 / 4.5 | 37 / 37 | 147 / 147 | 2940 / 2940 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 0 / 0 | 0.0 / 0.0 | 35 / 35 | 21 / 21 | 195 / 195 | 0% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 8.2 | 8.2 |
+| Load average (1m) | 1.5 | 1.5 |
+| CPU temp °C | 61 | 61 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:34:29+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 1
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 0 / 0 | 0.9 / 0.9 | 33 / 33 | 16 / 16 | 195 / 195 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 0 / 0 | 0.0 / 0.0 | 35 / 35 | 17 / 17 | 195 / 195 | 0% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 7.2 | 7.2 |
+| Load average (1m) | 0.6 | 0.6 |
+| CPU temp °C | 62 | 62 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:34:31+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 1
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 7 / 7 | 4.5 / 4.5 | 37 / 37 | 147 / 147 | 2940 / 2940 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 0 / 0 | 0.0 / 0.0 | 35 / 35 | 20 / 20 | 195 / 195 | 0% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 8.6 | 8.6 |
+| Load average (1m) | 0.6 | 0.6 |
+| CPU temp °C | 61 | 61 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:34:53+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 2
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 16 / 16 | 1.7 / 1.7 | 35 / 35 | 33 / 33 | 2640 / 2640 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 6 / 6 | 1.7 / 1.7 | 37 / 37 | 46 / 46 | 2437 / 2437 | 0% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 9.1 | 9.1 |
+| Load average (1m) | 0.7 | 0.7 |
+| CPU temp °C | 66 | 66 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:35:18+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 2
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 14 / 14 | 1.7 / 1.7 | 35 / 35 | 44 / 44 | 2632 / 2632 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 6 / 6 | 1.7 / 1.7 | 38 / 38 | 61 / 61 | 2437 / 2437 | 0% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 9.1 | 9.1 |
+| Load average (1m) | 0.7 | 0.7 |
+| CPU temp °C | 66 | 66 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:35:20+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 2
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 14 / 14 | 4.6 / 4.6 | 37 / 37 | 150 / 150 | 2970 / 2970 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 100 / 100 | 5.0 / 5.0 | 44 / 44 | 166 / 166 | 2872 / 2872 | 92% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 11.7 | 11.7 |
+| Load average (1m) | 0.7 | 0.7 |
+| CPU temp °C | 70 | 70 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:42:19+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 2
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 10 / 10 | 1.7 / 1.7 | 38 / 38 | 32 / 32 | 2670 / 2670 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 12 / 12 | 1.7 / 1.7 | 44 / 44 | 52 / 52 | 2460 / 2460 | 0% | 31 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 9.1 | 9.1 |
+| Load average (1m) | 1.0 | 1.0 |
+| CPU temp °C | 73 | 73 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:42:21+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 2
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 8 / 8 | 4.6 / 4.6 | 39 / 39 | 160 / 160 | 2970 / 2970 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 100 / 100 | 5.0 / 5.0 | 51 / 51 | 180 / 180 | 2872 / 2872 | 92% | 31 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 11.5 | 11.5 |
+| Load average (1m) | 1.0 | 1.0 |
+| CPU temp °C | 76 | 76 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:52:55+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 2
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 0 / 0 | 1.7 / 1.7 | 40 / 40 | 32 / 32 | 990 / 990 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 2 / 2 | 1.7 / 1.7 | 44 / 44 | 51 / 51 | 2017 / 2017 | 0% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 9.1 | 9.1 |
+| Load average (1m) | 0.7 | 0.7 |
+| CPU temp °C | 75 | 75 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.
+
+## pipeline-real (train)
+
+- **Started**: 2026-07-30T08:52:57+00:00
+- **Duration**: 0.0 min
+- **Samples**: 1 at 5s intervals
+- **Note**: answerdotai/ModernBERT-base, mlm, seq 512, world 2
+
+### GPU
+
+| GPU | Util % (mean/max) | Mem GiB (mean/peak) | Temp °C (mean/max) | Power W (mean/max) | SM MHz (mean/min) | % of max clock | Fan % | Throttled |
+|---|---|---|---|---|---|---:|---:|---:|
+| 0 (NVIDIA GeForce RTX 5090, 600W cap) | 16 / 16 | 5.0 / 5.0 | 42 / 42 | 160 / 160 | 2962 / 2962 | 0% | 0 | 0% |
+| 1 (NVIDIA GeForce RTX 5090, 575W cap) | 14 / 14 | 4.6 / 4.6 | 52 / 52 | 180 / 180 | 2865 / 2865 | 0% | 0 | 0% |
+
+### CPU and host
+
+| Metric | Mean | Max |
+|---|---:|---:|
+| Utilisation % | 0 | 0 |
+| RAM GiB (of 60) | 12.1 | 12.1 |
+| Load average (1m) | 0.7 | 0.7 |
+| CPU temp °C | 78 | 78 |
+
+### Warnings
+
+- **The cards have different power limits** (575W, 600W). Under DDP every step waits for the slower rank, so this caps the whole run, not just one device.

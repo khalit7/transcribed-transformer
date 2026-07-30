@@ -94,11 +94,38 @@ def lr_at(step: int, cfg: RunConfig) -> float:
 
 
 def mlm_batch(ids: torch.Tensor, cfg: RunConfig) -> Batch:
-    """Mask a fraction of positions; only those carry loss."""
+    """Corrupt a fraction of positions and score the model on recovering them.
+
+    The **input must actually be corrupted**, not just the labels restricted.
+    Selecting positions and leaving the tokens in place gives the model the
+    answer in its own input, so it learns to copy and the loss collapses towards
+    zero while looking like fast convergence. That is a silent failure: a
+    multi-day pretraining run would finish having learned nothing.
+
+    Standard BERT corruption: of the selected positions, 80% become the mask
+    token, 10% become a random token and 10% are left alone. The last two exist
+    because the mask token never appears at fine-tuning time, so a model trained
+    only on masks sees an input distribution it will never meet again.
+    """
+    if cfg.model.mask_token_id is None or cfg.model.vocab_size is None:
+        raise ValueError(
+            "MLM needs model.mask_token_id and model.vocab_size. Without a mask token "
+            "the input is left uncorrupted and the model trains on an identity task "
+            "that converges beautifully and teaches nothing."
+        )
+
     labels = ids.clone()
-    keep = torch.rand_like(labels, dtype=torch.float) < cfg.mlm_probability
-    labels[~keep] = -100
-    return {"input_ids": ids, "labels": labels}
+    selected = torch.rand(ids.shape, device=ids.device) < cfg.mlm_probability
+    labels[~selected] = -100
+
+    inputs = ids.clone()
+    draw = torch.rand(ids.shape, device=ids.device)
+    inputs[selected & (draw < 0.8)] = cfg.model.mask_token_id
+    randomise = selected & (draw >= 0.8) & (draw < 0.9)
+    inputs[randomise] = torch.randint(
+        0, cfg.model.vocab_size, ids.shape, device=ids.device, dtype=ids.dtype
+    )[randomise]
+    return {"input_ids": inputs, "labels": labels}
 
 
 def clm_batch(ids: torch.Tensor, cfg: RunConfig) -> Batch:  # noqa: ARG001
@@ -164,7 +191,16 @@ def save_checkpoint(
     state: TrainState,
     cfg: RunConfig,
 ) -> Path:
-    """Write a resumable checkpoint. Rank 0 writes weights; every rank writes its RNG."""
+    """Write a resumable checkpoint. Rank 0 writes weights; every rank writes its RNG.
+
+    Barriered at both ends. The ranks do very unequal work here — rank 0 writes
+    hundreds of megabytes while the others write a few kilobytes of RNG state —
+    so without a barrier the fast ranks run ahead into the next collective while
+    rank 0 is still writing. That does not crash: it desynchronises, and the run
+    finishes its work and then spins in NCCL forever instead of exiting, which
+    looks exactly like a hang.
+    """
+    _barrier()
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"step-{state.step:08d}"
     path.mkdir(parents=True, exist_ok=True)
@@ -183,7 +219,14 @@ def save_checkpoint(
         (path / "config.json").write_text(json.dumps(cfg.resolved(), indent=1))
 
     torch.save(_rng_state(), path / f"rng-rank{hardware.rank()}.pt")
+    _barrier()
     return path
+
+
+def _barrier() -> None:
+    """Synchronise ranks, or do nothing when running single-process."""
+    if hardware.is_distributed() and dist.is_initialized():
+        dist.barrier()
 
 
 def latest_checkpoint(directory: Path) -> Path | None:
@@ -358,16 +401,31 @@ def random_batches(cfg: RunConfig, vocab_size: int, device: torch.device) -> Bat
 
 
 def cleanup() -> None:
+    """Leave the process group, after making sure every rank has arrived.
+
+    Tearing down while another rank is still inside a collective leaves that rank
+    spinning on a peer that no longer exists.
+    """
     if hardware.is_distributed() and dist.is_initialized():
+        dist.barrier()
         dist.destroy_process_group()
 
 
 def setup_distributed() -> torch.device:
-    if hardware.is_distributed():
+    """Join the process group, or return the device if already joined.
+
+    Idempotent: calling it twice in one process is a mistake, but torch answers
+    that mistake by aborting every rank with "initialize the default process
+    group twice", which surfaces as a bare exit code 1 from a worker and reads
+    like a data or model failure. Returning the device instead keeps the failure
+    where it belongs.
+    """
+    if not hardware.is_distributed():
+        return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    if not dist.is_initialized():
         dist.init_process_group(backend="nccl")
-        torch.cuda.set_device(hardware.local_rank())
-        return torch.device(f"cuda:{hardware.local_rank()}")
-    return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    torch.cuda.set_device(hardware.local_rank())
+    return torch.device(f"cuda:{hardware.local_rank()}")
 
 
 def seed_everything(seed: int) -> None:
