@@ -98,6 +98,10 @@ class Objective(StrEnum):
     CLM = "clm"
     """Causal language modelling. Arm E phase 1 of the biphasic schedule."""
 
+    MNTP = "mntp"
+    """Masked next token prediction. Arm C, adapting a causal decoder to
+    bidirectional attention while reusing the head it was pretrained with."""
+
 
 class ScheduleConfig(BaseModel):
     """Learning-rate schedule."""

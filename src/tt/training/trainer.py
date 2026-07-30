@@ -137,9 +137,27 @@ def clm_batch(ids: torch.Tensor, cfg: RunConfig) -> Batch:  # noqa: ARG001
     return {"input_ids": ids, "labels": ids.clone()}
 
 
+def mntp_batch_objective(ids: torch.Tensor, cfg: RunConfig) -> Batch:
+    """Arm C's adaptation objective. See :mod:`tt.models.bidirectional`."""
+    from tt.models.bidirectional import mntp_batch
+
+    if cfg.model.mask_token_id is None or cfg.model.vocab_size is None:
+        raise ValueError(
+            "MNTP needs model.mask_token_id and model.vocab_size, for the same reason "
+            "MLM does: without a mask token the input is never corrupted."
+        )
+    return mntp_batch(
+        ids,
+        mask_token_id=cfg.model.mask_token_id,
+        vocab_size=cfg.model.vocab_size,
+        probability=cfg.mlm_probability,
+    )
+
+
 OBJECTIVES: dict[Objective, Callable[[torch.Tensor, RunConfig], Batch]] = {
     Objective.MLM: mlm_batch,
     Objective.CLM: clm_batch,
+    Objective.MNTP: mntp_batch_objective,
 }
 
 
