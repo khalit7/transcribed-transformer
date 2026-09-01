@@ -58,7 +58,7 @@ Every corpus considered for this project, including the ones refused, and why. A
 | LibriSpeech / Libri-Light / MLS | huge | P | 2 | read audiobooks | no | Read speech, disqualified as case/pretraining text; usable as clean-side calibration only |
 | Loquacious Set | 25k h | P (assembled CC0/CC-BY) | 2 | utterance-chunked, half read | no | Wrong shape (clips, read speech) |
 | [GigaSpeech](https://github.com/SpeechColab/GigaSpeech) | 10k h | NC (Terms of Access: non-commercial; Apache tag covers code only) | 2 (text is forced-aligned human) | podcasts/YouTube | queued (NC, T3) | Commonly mislabelled permissive; it is not |
-| [SPoRC](https://huggingface.co/datasets/blitt/SPoRC) | 1.1M episodes | NC (gated research-only) | 1 | podcasts, diarised turns, long | queued (NC, T3) | Plenty of dyadic interview shows |
+| [SPoRC](https://huggingface.co/datasets/blitt/SPoRC) | 1.1M episodes | NC (gated research; accepted 2026-09-01) | 1 | podcasts, diarised `SPEAKER_NN` turns, long | **yes** | Ingested 2026-09-01, text layers only. Measured 4.585B tokens over 185.2M turns: the NC pretraining pool on its own |
 | [RadioTalk](https://github.com/social-machines/RadioTalk) | 2.8B words, 284k h | NC (no licence stated → NC) | 1 | talk radio incl. call-ins | queued (NC, T3) | Real Kaldi ASR with speaker turns and a phone/studio flag |
 | [CFPB complaints](https://www.consumerfinance.gov/data-research/consumer-complaints/) | ~2M narratives | P (US gov PD, verify) | 3 | written, never spoken | queued (T2, low) | Only large source of real financial-complaint content; channel model required |
 | FineWeb-Edu | huge | P (ODC-By, verify) | 3 | web text | no — reserve | Was the from-scratch-ablation control; that arm is gone. Reserve for generic-text contrast experiments |

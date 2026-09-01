@@ -39,14 +39,15 @@ Waves: **w1** = 2026-07 (initial ingests), **w2** = the 2026-08-31 acquisition r
 
 | Dataset | Added | Status | Role | Track | Tier | SA | Local path | Raw size (MB) | Tokens | License |
 |---|---|---|---|---|---|---|---|---|---|---|
-| [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/) | w1 | raw on disk | channel-fitting reference (paired ASR + verbatim); pretraining text (ASR layer) | P | **1** | — | `data/raw/ami/` | 91 | **1,280,265** (asr, 126 meetings) · 1,674,833 (manual, 171) | CC-BY-4.0 |
+| [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/) | w1 | raw on disk | tier 1 pretraining text (asr layer); paired manual layer kept but its 2007 recogniser is not a channel-fitting reference | P | **1** | — | `data/raw/ami/` | 91 | **1,280,265** (asr, 126 meetings) · 1,674,833 (manual, 171) | CC-BY-4.0 |
 | [Taskmaster-1 + 2](https://github.com/google-research-datasets/Taskmaster) | w1 | raw on disk | case-packing dialogue text (short dyadic service calls, advisor/customer roles) | P | 3 | — | `data/raw/taskmaster/` | 152 | **8,102,358** (22,807 dialogues) | CC-BY-4.0 |
-| [AppTek Call-Center Dialogues](https://huggingface.co/datasets/apptek-com/apptek_callcenter_dialogues) | w2 | transcripts on disk; ⚠️ audio deferred (tier-1-first policy, 2026-08-31; 5.6 GB of 52 GB fetched, resumable) | **eval + channel reference only, never training text** (source card: evaluation-only intent); benchmark case text, modern-recogniser channel fitting | P | 2 | **SA** | `data/raw/apptek_callcenter/` | 52,224 (stated) | TBD (measured 1,278,110 words, 94,679 turns, 873 calls) | CC-BY-SA-4.0 |
+| [AppTek Call-Center Dialogues](https://huggingface.co/datasets/apptek-com/apptek_callcenter_dialogues) | w2 | **complete on disk** (audio finished 2026-09-01, 49 GB, 2,619 WAVs; self-ASR passes running) | **eval + channel reference only, never training text** (source card: evaluation-only intent); benchmark case text, modern-recogniser channel fitting | P | 2 | **SA** | `data/raw/apptek_callcenter/` | 52,224 (stated) | TBD (measured 1,278,110 words, 94,679 turns, 873 calls) | CC-BY-SA-4.0 |
 | [ACI-Bench](https://github.com/microsoft/clinical_visit_note_summarization_corpus) | w2 | raw on disk | vulnerability (health) case text; **paired ASR/corrected/human channel reference** | P | **1** | — | `data/raw/aci_bench/data/aci-bench/` | 10 (repo) | TBD (measured 269,523 dialogue words, 207 encounters) | CC-BY-4.0 |
 | MTS-Dialog (same repo) | w2 | ⚠️ on disk, not used | short written doctor/patient snippets + summaries | **NC** (by ambiguity) | 3 | — | `data/raw/aci_bench/data/mts-dialog/` | ″ | TBD | CC-BY-4.0 repo / mtsamples terms unclear |
 | [CourtListener oral arguments](https://www.courtlistener.com/audio/) (scotus, cadc, ca1) | w2 | raw on disk (3 courts complete) | long-context tier 1 pretraining text | P | **1** | — | `data/raw/courtlistener/<court>/` | 234 | TBD (measured **42,385,111 words**, 6,518 arguments) | Public domain (US federal works; Free Law bulk data) |
 | [MeetingBank](https://huggingface.co/datasets/huuuyeah/meetingbank) | w2 | raw on disk | NC long-context tier 1 pretraining text; summary supervision | **NC** | **1** | — | `data/raw/meetingbank/` | 110 | TBD (measured 19,921,133 words, 6,892 agenda-item records) | CC-BY-NC-SA-4.0 |
 | [CallCenterEN](https://huggingface.co/datasets/AIxBlock/92k-real-world-call-center-scripts-english) | w2 | raw on disk | NC in-domain tier 1 pretraining text (service calls) | **NC** | **1** | — | `data/raw/callcenteren/` | 1,433 | TBD (95,953 call JSONs; sampled: mean 1,068 words/call, p95 2,850) | CC-BY-NC-4.0 |
+| [SPoRC](https://huggingface.co/datasets/blitt/SPoRC) | w2 | raw on disk (text layers) | NC pretraining backbone: diarised conversational turns at scale | **NC** | **1** | — | `data/raw/sporc/` | 29,184 | **4,585,128,049** (source's own token_count; 185,218,224 turns, 1,124,058 episodes) | research gate (accepted 2026-09-01) |
 
 **Total on disk** (measured 2026-07-29, ModernBERT-large tokenizer): **9,382,623 training-usable tokens** across 22,933 transcripts (AMI asr + Taskmaster; the AMI manual layer is channel reference, not training text).
 
@@ -54,12 +55,12 @@ Pipeline rule (applies to every row): each source lands in `data/raw/<name>/` vi
 
 ## AMI Meeting Corpus
 
-- **Role:** the only Track P corpus pairing real ASR output with a human verbatim transcript of the same speech, so it is the channel-fitting reference; its ASR layer is also tier 1 pretraining text · **Path:** `data/raw/ami/` (`ami_public_auto_1.5.1.zip`, `ami_public_manual_1.6.2.zip`) · **Tokens:** see summary · **Size:** 91 MB
+- **Role:** tier 1 pretraining text (ASR layer). It also pairs that ASR with a human verbatim transcript of the same speech, but the recogniser is from 2007, so the pairing is a historical record rather than a channel-fitting reference (channel v2 fits from modern pairs: AppTek, PriMock57, ACI-Bench) · **Path:** `data/raw/ami/` (`ami_public_auto_1.5.1.zip`, `ami_public_manual_1.6.2.zip`) · **Tokens:** see summary · **Size:** 91 MB
 - **License:** CC-BY-4.0, verified 2026-07-29 against the `LICENCE.txt` bundled inside the annotation archive itself: *"The AMI corpus and its annotations are released under the Creative Commons Attribution 4.0 International Public License agreement (CC BY 4.0)."* Attribution propagates to model cards. The licence covers signals and transcription plus some annotations; only the transcription layers are used. · **Source:** https://groups.inf.ed.ac.uk/ami/corpus/
 
 100+ hours of 4–5 speaker research meetings, spontaneous and disfluent. **Both transcript layers ship**: real ASR output (`ASR/ASR_AS_CTM_v1.0_feb07/`, 664 per-speaker word files with timings) and human verbatim annotation. The ASR layer covers 126 meetings, all with a manual counterpart; 45 manual-only meetings have no ASR. On the 126 paired meetings the ASR side yields 1,280,265 tokens against 1,219,423 manual (ratio 1.05) and 102,014 turns against 58,199 (1.75): finer segmentation, no punctuation. Per-meeting ASR token lengths (2026-07-29): min 1,699 / p50 9,912 / p95 19,202 / max 29,749; 67.5% exceed 8k, none exceed 32k.
 
-The recogniser is the AMI-ASR system of **February 2007** (measured WER 0.395 against the manual layer). That error rate is far above a modern recogniser's and it emits no punctuation or casing, so a channel fitted on it over-noises and under-punctuates relative to the modern commercial ASR this project targets; see the calibration note in [`SYNTHSHEET.md`](SYNTHSHEET.md).
+The recogniser is the AMI-ASR system of **February 2007** (measured WER 0.395 against the manual layer). That error rate is far above a modern recogniser's and it emits no punctuation or casing, which is why this pairing is excluded from channel fitting ([`SYNTHSHEET.md`](SYNTHSHEET.md)); a channel v1 fitted from it pre-reset was discarded on 2026-09-01 for that reason. The ASR layer remains valid tier 1 text, with its age recorded as a convention caveat.
 
 Known quality problems: speaker labels are meeting roles, not service roles, so role identification supervision is absent; scenario meetings are role-played; one speaker has segments but no word stream and is skipped. The meetings are multi-party (4–5 speakers), which the target distribution's own multi-speaker character makes less of a mismatch than a strict two-party framing would suggest, though the register is a meeting, not a service call.
 
@@ -157,9 +158,18 @@ Known quality problems, and they matter: **no speaker turns** — the `speaker` 
 
 1. `Thank you for calling [ORGANIZATION] [ORGANIZATION] [ORGANIZATION]. This is [PERSON_NAME]. How can I help you today? Hi, I'm looking to get a grooming appointment. I had filled out paperwork yesterday and left a message to be called or texted back. Sure, just give me one second. Let me pull up your account.`
 
-## Channel artifact v1 (pipeline artifact)
+## SPoRC (wave 2)
 
-- **Role:** ⚠️ reference only — superseded for synthesis once a modern-recogniser channel is fitted · **Path:** `data/channel/ami_channel_v1.json` · **Size:** 4 MB
-- **Generated by:** the pre-reset `asr_channel` fit over the 126 paired AMI meetings (942,880 reference words): WER 0.3946 (sub 0.2524, del 0.0791, ins 0.0631), 88,849 distinct substitution pairs. Kept as the measured record of a 2007-era recogniser's error profile and as a severity upper bound; **why it is not used for synthesis**: the target distribution is modern commercial ASR with restored punctuation and casing, which this channel neither models nor approximates. The refit plan is in [`SYNTHSHEET.md`](SYNTHSHEET.md).
+- **Role:** the NC track's pretraining backbone: the only source at scale whose text has the target's structural shape — diarised `SPEAKER_NN` turns over long spontaneous conversations · **Path:** `data/raw/sporc/` (`turns/text/` 127 parquet, `episodes/` 140 parquet, manifest, READMEs; the acoustics and bulk metadata layers were deliberately not fetched) · **Tokens:** **4,585,128,049** by the source's own `token_count` column, summed exactly over all 185,218,224 turns across 1,124,058 podcast episodes (project-tokenizer count TBD) · **Size:** 28.5 GB
+- **License:** gated research release (HF gate accepted by the account 2026-09-01) → **Track NC**. · **Source:** https://huggingface.co/datasets/blitt/SPoRC — the Structured Podcast Research Corpus
+- **Procured:** ranked 3rd of the remaining tier 1 sources; text-only download via `scripts/download_sporc.py` 2026-09-01. Processing module: TBD.
+
+Whisper transcription with diarisation over open-RSS podcast audio. Per-turn schema: `episode_id`, `podcast_id`, `speaker` (`SPEAKER_00` convention, the same as the target distribution's), `turn_text`, start/end times, `token_count`, plus inferred speaker name/role where the pipeline could establish them. Turn lengths are strongly bimodal (sampled median 7 words, mean 40): backchannels interleaved with long monologues, which also matches the target's shape.
+
+Known quality problems: podcast register (ads, intros, music segments transcribed as speech); diarisation quality varies with episode audio; `speaker` can list multiple ids on a merged turn; many episodes are monologues, so conversational subsetting (2+ speakers, turn-alternation rate) is a preprocessing decision; advertising boilerplate repeats heavily and needs dedupe before training.
+
+**Examples** (turns/text, verbatim; truncated):
+
+1. `SPEAKER_00:  Welcome to the Big Mx Radio Podcast. Brought to you by MedTerra CBD. You can go to MedTerra CBD.com right now and enter discount code Big Mx Radio 15 to say 15% on every single one of your orders.`
 
 Keep this file current when a dataset is added, removed, or re-scoped.

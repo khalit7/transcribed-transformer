@@ -17,10 +17,11 @@ The target is the output of current commercial transcription pipelines, whose be
 
 | Artifact | File | Fitted from | State |
 |---|---|---|---|
-| `ami_channel_v1` | `data/channel/ami_channel_v1.json` | 126 paired AMI meetings, AMI-ASR Feb-2007 system (WER 0.3946) | ⚠️ reference only. A 2007 recogniser without punctuation over-noises and under-punctuates relative to the modern target; kept as a severity upper bound and historical record |
-| `channel_v2` | TBD | planned: self-ASR (Whisper large-v3, Parakeet) over AppTek and PriMock57 audio against their verbatim transcripts, per-system and pooled; ACI-Bench's shipped ASR/human pairs join as a third reference | not started — audio downloads deferred under the 2026-08-31 tier-1-first policy; ACI-Bench pairs are already on disk |
+| `channel_v2` | TBD | self-ASR (Whisper large-v3, Parakeet) over AppTek and PriMock57 audio against their verbatim transcripts, per-system and pooled; ACI-Bench's shipped ASR/human pairs join as a third reference | in progress — AppTek audio downloading (2026-09-01), transcription pipeline in `scripts/transcribe.py`; ACI-Bench pairs already on disk |
 
-Fitting requires word-level alignment between reference and hypothesis streams; the v1 fit aligned per 20-second window because ASR turn segmentation is finer than a human transcriber's. Artifacts are versioned as wandb artifacts when runs consume them.
+There is no usable v1: a pre-reset channel fitted from AMI's 2007 ASR/manual pairing was discarded on 2026-09-01, because a 2007 recogniser without punctuation models nothing about the modern target and it will not be used anywhere. AMI's pairing stays excluded from fitting for the same reason. v2 starts the version history.
+
+Fitting requires word-level alignment between reference and hypothesis streams, windowed by time rather than by turn, because ASR turn segmentation is finer than a human transcriber's. Artifacts are versioned as wandb artifacts when runs consume them.
 
 ## 4. Route A recipe (channel model)
 
@@ -46,8 +47,8 @@ A synthetic corpus enters a training mixture only after both gates:
 
 Synthetic documents land in `data/interim/<source>-synth/` with the channel or pipeline version stamped per document, get a DATASHEET row when first mixed, and are packed like any other source. Tracks are inherited from the source text; TTS/ASR tooling licences are recorded alongside.
 
-## 8. Prerequisites
+## 8. State
 
-Route A v2 needs tranche 1's paired corpora on disk. Route B needs the TTS stack installed and a measured real-time factor on the 5090s before any corpus-scale run is priced. Neither is started; nothing on this sheet has produced training data yet.
+The self-ASR pipeline is live: `scripts/transcribe.py` (faster-whisper large-v3, float16, word timestamps; telephone degradation per §5 minus codec/noise, which wait on ffmpeg). Measured 2026-09-01 on one RTX 5090: **20x realtime** on a smoke-test call. First production pass (AppTek diarization config, 873 calls) running; the split-channel pass and the channel-v2 fit follow once the AppTek `test` audio finishes downloading. The TTS route is not started. Nothing on this sheet has produced *training* data yet.
 
 Keep this file current when a recipe, model choice, or QC gate changes.
