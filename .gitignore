@@ -22,6 +22,10 @@ wandb/
 .env.*
 !.env.example
 
+# Local working notes
+/notes.md
+/CLAUDE.local.md
+
 # Backstop only. Internal reference material must live outside the repo
 # entirely, not here: an ignore rule is one `git add -f` or one careless
 # edit away from failing, and an ignored file is invisible to the diff
