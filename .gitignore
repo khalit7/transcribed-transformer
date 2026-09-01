@@ -1,9 +1,9 @@
-# Corpus data is never committed. Loaders download here.
-data/raw/
-data/cache/
-data/processed/
-*.arrow
-*.parquet
+# Data: ignore everything, keep only the sheets
+data/**
+!data/
+!data/DATASHEET.md
+!data/SURVEYSHEET.md
+!data/SYNTHSHEET.md
 
 # Model weights and checkpoints
 checkpoints/
@@ -29,6 +29,7 @@ wandb/
 /context.md
 *.private.md
 /private/
+transcript_description*
 
 # Python
 __pycache__/

@@ -1,188 +1,165 @@
-# Datasheet
+# Datasheet — transcribed-transformer
 
-Every corpus used in this project is recorded here before it is used. Entries are added by the `add-corpus` skill, which will not proceed without a licence decision.
+The datasets this project holds: what each one is, where it lives, how big it is, what role it plays, and under what licence. The corpus **survey** and every acquisition decision, including refusals, live in [`SURVEYSHEET.md`](SURVEYSHEET.md); a source only earns a row here once it is on disk. The recipes for **synthetic** transcript text live in [`SYNTHSHEET.md`](SYNTHSHEET.md); when a synthetic corpus enters a training mixture, its row goes here and the recipe stays there.
+
+## Overview
+
+`data/` holds only data; all code lives in `src/`. Sources are immutable under `data/raw/<dataset>/`, one folder per dataset. Derived artefacts — `data/interim/<name>/{train,val}.jsonl` and `data/packed/<stage>/` token streams — are regenerable and not documented here.
+
+Measurement provenance: token counts are measured on the local copy with the tokenizer named per entry, never copied from a dataset card. Counts dated 2026-07-29 were produced with the ModernBERT-large tokenizer over a one-turn-per-line render by preprocessing code removed in the 2026-08-31 repo reset; they remain the best measurements until the new preprocessing re-measures them. `TBD` means not yet measured; nothing here is estimated.
+
+No raw sample is committed (all of `data/` except the three sheets is gitignored), so the examples quoted below are the canonical record of what each corpus looks like.
+
+Keep this file current when a dataset is added, removed, or re-scoped.
 
 ## Licence tracks
 
 | Track | Criteria | Consequence |
 |---|---|---|
 | **P** — permissive | Commercial use allowed **and** derivatives redistributable | Models trained on Track P only are commercially portable |
-| **NC** — non-commercial | CC BY-NC, research-only, unclear, or bespoke academic agreement | Any model touching this data is research-only |
+| **NC** — non-commercial | CC BY-NC, research-only, or unclear | Any model touching this data is research-only |
 
-Ambiguity resolves to **NC**. Tracks are never mixed within a training run. Every headline result is reported on both tracks.
-
-Raw corpus data is never committed to this repository. Loaders download to a gitignored local cache.
+Ambiguity resolves to **NC**. Share-alike licences (CC BY-SA, CDLA-Sharing) qualify for Track P but carry an **SA flag**: released derivatives must carry the licence forward, and model cards must say so. Tracks are never mixed within a training run. Every headline result is reported on both tracks.
 
 ## Data tiers
 
-Licence says whether we *may* use a corpus. Tier says how close it is to the distribution this project actually models, which is ASR output.
+Licence says whether we *may* use a corpus. Tier says how close it is to the distribution this project models, which is ASR output.
 
 | Tier | What | How it is used |
 |---|---|---|
 | **1** | Real ASR output, disfluencies and recognition errors intact | Directly, as training text |
 | **2** | Audio available, so we can produce tier 1 ourselves | Run ASR over it; the system used is recorded |
-| **3** | Clean written text, or human-verbatim transcription | Channel model applied first. Requires a justification for why nothing better was available |
+| **3** | Clean written text, or human-verbatim transcription | Channel model applied first ([`SYNTHSHEET.md`](SYNTHSHEET.md)). Requires a justification for why nothing better was available |
 
 **Human-verbatim transcription is tier 3, not tier 1.** A transcriber who silently repairs a false start has removed the signal this project exists to model. A corpus shipping both a human and an ASR transcript is tier 1, and its human side becomes reference data for fitting the channel rather than training text.
 
-## Status
+## Summary — the single source of truth for ALL data
 
-**Ingested: AMI, Taskmaster-1+2** (licence verified at source, loader written and tested, token count measured).
+Waves: **w1** = 2026-07 (initial ingests), **w2** = the 2026-08-31 acquisition round (tranche 1 of the [survey queue](SURVEYSHEET.md#ranked-ingestion-queue)). Status `raw on disk` means licence verified and source downloaded, preprocessing module not yet written (all preprocessing code was removed in the 2026-08-31 reset). `—` means not applicable.
 
-Combined Track P ingested total: **9,777,191 tokens** across 22,978 transcripts. The two are complementary rather than additive: AMI is long multi-party meetings (p50 9,630 tokens), Taskmaster is short dyadic service calls (p50 321). Neither covers long-context *dyadic* conversation, which remains the gap on this track.
+| Dataset | Added | Status | Role | Track | Tier | SA | Local path | Raw size (MB) | Tokens | License |
+|---|---|---|---|---|---|---|---|---|---|---|
+| [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/) | w1 | raw on disk | channel-fitting reference (paired ASR + verbatim); pretraining text (ASR layer) | P | **1** | — | `data/raw/ami/` | 91 | **1,280,265** (asr, 126 meetings) · 1,674,833 (manual, 171) | CC-BY-4.0 |
+| [Taskmaster-1 + 2](https://github.com/google-research-datasets/Taskmaster) | w1 | raw on disk | case-packing dialogue text (short dyadic service calls, advisor/customer roles) | P | 3 | — | `data/raw/taskmaster/` | 152 | **8,102,358** (22,807 dialogues) | CC-BY-4.0 |
+| [AppTek Call-Center Dialogues](https://huggingface.co/datasets/apptek-com/apptek_callcenter_dialogues) | w2 | transcripts on disk; ⚠️ audio deferred (tier-1-first policy, 2026-08-31; 5.6 GB of 52 GB fetched, resumable) | **eval + channel reference only, never training text** (source card: evaluation-only intent); benchmark case text, modern-recogniser channel fitting | P | 2 | **SA** | `data/raw/apptek_callcenter/` | 52,224 (stated) | TBD (measured 1,278,110 words, 94,679 turns, 873 calls) | CC-BY-SA-4.0 |
+| [ACI-Bench](https://github.com/microsoft/clinical_visit_note_summarization_corpus) | w2 | raw on disk | vulnerability (health) case text; **paired ASR/corrected/human channel reference** | P | **1** | — | `data/raw/aci_bench/data/aci-bench/` | 10 (repo) | TBD (measured 269,523 dialogue words, 207 encounters) | CC-BY-4.0 |
+| MTS-Dialog (same repo) | w2 | ⚠️ on disk, not used | short written doctor/patient snippets + summaries | **NC** (by ambiguity) | 3 | — | `data/raw/aci_bench/data/mts-dialog/` | ″ | TBD | CC-BY-4.0 repo / mtsamples terms unclear |
+| [CourtListener oral arguments](https://www.courtlistener.com/audio/) (scotus, cadc, ca1) | w2 | raw on disk (3 courts complete) | long-context tier 1 pretraining text | P | **1** | — | `data/raw/courtlistener/<court>/` | 234 | TBD (measured **42,385,111 words**, 6,518 arguments) | Public domain (US federal works; Free Law bulk data) |
+| [MeetingBank](https://huggingface.co/datasets/huuuyeah/meetingbank) | w2 | raw on disk | NC long-context tier 1 pretraining text; summary supervision | **NC** | **1** | — | `data/raw/meetingbank/` | 110 | TBD (measured 19,921,133 words, 6,892 agenda-item records) | CC-BY-NC-SA-4.0 |
+| [CallCenterEN](https://huggingface.co/datasets/AIxBlock/92k-real-world-call-center-scripts-english) | w2 | raw on disk | NC in-domain tier 1 pretraining text (service calls) | **NC** | **1** | — | `data/raw/callcenteren/` | 1,433 | TBD (95,953 call JSONs; sampled: mean 1,068 words/call, p95 2,850) | CC-BY-NC-4.0 |
 
-Everything else below is the planned set, recorded with the licence position established during design. **Each still needs its licence verified against the primary source, its loader written, and its actual token count measured** before it counts as ingested. The AnnoMI entry is what that verification looks like when it fails.
+**Total on disk** (measured 2026-07-29, ModernBERT-large tokenizer): **9,382,623 training-usable tokens** across 22,933 transcripts (AMI asr + Taskmaster; the AMI manual layer is channel reference, not training text).
 
-## Track P
+Pipeline rule (applies to every row): each source lands in `data/raw/<name>/` via a script in `scripts/`, gets a preprocessing module producing `data/interim/<name>/{train,val}.jsonl` split by container (meeting / dialogue / call — never by turn), and enters training only through a mixture manifest (`configs/mixtures/*.yaml`) whose per-source token counts are recorded in the pack's `meta.json`. Manifests refuse to mix licence tracks.
 
-### AMI Meeting Corpus
-- **Tier**: **1.** AMI ships a second archive, [`ami_public_auto_1.5.1.zip`](https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_auto_1.5.1.zip) (68MB, also CC BY 4.0), containing real ASR output under `ASR/ASR_AS_CTM_v1.0_feb07/` — 664 word-level hypothesis files with timings, named `{meeting}.{speaker}.words.xml` exactly as the manual ones are. Its README states: *"if you want to use the alignment between ASR and manual transcription you need the manual data unzipped into the same directory."* So AMI is a **paired** corpus: ASR output for training, human transcript as channel-fitting reference.
-- **Correction, 2026-07-29**: this entry previously described only the manual annotations, and the loader read only those. Under the data-tier rule that was the wrong layer — human-verbatim transcription is tier 3, and a tier 1 layer was sitting unopened in the same distribution. The loader gains a `variant` parameter and the ASR layer becomes the default for training text.
-- **ASR system**: `ASR_AS_CTM_v1.0_feb07`, the AMI-ASR system circa **February 2007**. Its word error rate is far above a modern recogniser's, so a channel fitted on it without severity calibration will **over-noise** relative to the ASR systems this project is ultimately aimed at. That is a calibration problem, not a disqualifying one, and the adversarial validation gate is what catches it.
-- **Source**: https://groups.inf.ed.ac.uk/ami/corpus/ — annotations from https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip (22MB, sha256 `b56e5bab…bbc9f9d`, pinned in the loader)
-- **Licence**: **CC BY 4.0**, verified 2026-07-29 against the `LICENCE.txt` bundled *inside the annotation archive itself*, which is the most authoritative source available: *"The AMI corpus and its annotations are released under the Creative Commons Attribution 4.0 International Public License agreement (CC BY 4.0)."* The download page corroborates it for this release: *"annotations unchanged since 16-June 2014 release; license altered to CC BY 4.0"*. Commercial use permitted, derivatives redistributable.
-- **Track**: P
-- **Restrictions**: **attribution required** — this obligation propagates to anything trained on it and must appear in model cards, not just here. The corpus page scopes the licence as "all of the signals and transcription, and some of the annotations", so **the annotation layers are not uniformly covered**; only the orthographic transcription is used here, and that is covered. Raw data is not committed regardless.
-- **Why**: verbatim spontaneous multi-party speech with disfluencies preserved
-- **Audio available**: yes, though not downloaded by the loader. This is the only Track P corpus pairing audio with human verbatim transcripts, so it is the reference data for ASR channel-model fitting.
-- **Transcripts**: **both**. Human verbatim orthographic (manual archive) *and* real ASR output (auto archive). This is what makes AMI the single most valuable corpus here despite its small size and wrong interaction shape.
-- **Size measured 2026-07-29**, ModernBERT-large tokenizer over `Transcript.render()`:
+## AMI Meeting Corpus
 
-  | Variant | Meetings | Turns | Tokens |
-  |---|---:|---:|---:|
-  | `asr` (tier 1, default) | 126 | 102,014 | **1,280,265** |
-  | `manual` (tier 3, reference) | 171 | 83,868 | 1,674,833 |
+- **Role:** the only Track P corpus pairing real ASR output with a human verbatim transcript of the same speech, so it is the channel-fitting reference; its ASR layer is also tier 1 pretraining text · **Path:** `data/raw/ami/` (`ami_public_auto_1.5.1.zip`, `ami_public_manual_1.6.2.zip`) · **Tokens:** see summary · **Size:** 91 MB
+- **License:** CC-BY-4.0, verified 2026-07-29 against the `LICENCE.txt` bundled inside the annotation archive itself: *"The AMI corpus and its annotations are released under the Creative Commons Attribution 4.0 International Public License agreement (CC BY 4.0)."* Attribution propagates to model cards. The licence covers signals and transcription plus some annotations; only the transcription layers are used. · **Source:** https://groups.inf.ed.ac.uk/ami/corpus/
 
-  **The ASR layer covers fewer meetings**: 126, all of which have a manual counterpart, with 45 manual-only meetings having no ASR. So the two totals are not comparable directly, and the honest comparison is on the 126 paired meetings: **1,280,265 ASR tokens against 1,219,423 manual, a ratio of 1.05**, and **102,014 ASR turns against 58,199, a ratio of 1.75**. ASR produces slightly *more* tokens despite emitting no punctuation, and far more turns because its segmentation is finer than a human transcriber's.
-- **ASR-variant token-length distribution per meeting**: min 1,699 / p25 6,607 / **p50 9,912** / p75 12,417 / p90 16,130 / p95 19,202 / p99 26,136 / max 29,749. Exceeding 8k: **67.5%**; 16k: 10.3%; 32k: **0.0%**. Slightly longer-tailed than the manual layer, consistent with the token ratio above.
-- **126 paired meetings is what the channel model is fitted from.** That is the entire supply of Track P reference/hypothesis pairs, and it sets the ceiling on how well the channel can be estimated.
-- **Token-length distribution per meeting**: min 1,375 / p25 6,319 / **p50 9,630** / p75 12,550 / p90 15,487 / p95 17,689 / p99 23,641 / max 29,605. **Unimodal**, single peak around 8–11k, right-skewed. Fraction exceeding 4k: 88.9%; 8k: **62.0%**; 16k: 8.8%; 32k: **0.0%**.
-- **Consequences**: the whole corpus fits under 32k, so no meeting needs truncation or chunking. But 62% exceed 8k, so an 8k context window would truncate the majority of meetings — this corpus alone argues for the context-extension phase rather than making it optional.
-- **Preprocessing the loader applies**: NXT per-speaker word streams resolved against per-speaker segment files, then merged across speakers by `(start time, speaker, segment id)` to produce one chronological turn sequence. Words kept verbatim including filled pauses, repetitions and truncations. Non-lexical annotation markup (`vocalsound`, `disfmarker`, `gap`, `transformerror`) is excluded from the text because it is annotation *about* speech rather than spoken words and no ASR system emits it; counts are recorded per transcript in `meta`. Corpus-wide excluded: 27,395 disfmarker, 27,073 vocalsound, 5,125 gap, 30 transformerror. Segments containing only markup are dropped rather than emitted as empty lines.
-- **Known quality problems**: speaker roles are meeting roles (project manager, designer), not advisor/customer, so every turn is `Role.UNKNOWN` — the loader does not guess. 4–5 speakers per meeting, so this is multi-party rather than dyadic and is a **structural mismatch** with two-party advisor/customer calls; useful for disfluency and channel modelling, weaker as a task-shape proxy. One speaker in the archive has segments but no word stream and is skipped. Scenario meetings are role-played rather than genuine.
-- **ICSI**: listed in earlier drafts alongside AMI. Not yet assessed, has its own licence, and needs its own entry before use.
-- **Status**: **loader written and tested; full corpus parsed and measured.** Not yet used in any training run.
+100+ hours of 4–5 speaker research meetings, spontaneous and disfluent. **Both transcript layers ship**: real ASR output (`ASR/ASR_AS_CTM_v1.0_feb07/`, 664 per-speaker word files with timings) and human verbatim annotation. The ASR layer covers 126 meetings, all with a manual counterpart; 45 manual-only meetings have no ASR. On the 126 paired meetings the ASR side yields 1,280,265 tokens against 1,219,423 manual (ratio 1.05) and 102,014 turns against 58,199 (1.75): finer segmentation, no punctuation. Per-meeting ASR token lengths (2026-07-29): min 1,699 / p50 9,912 / p95 19,202 / max 29,749; 67.5% exceed 8k, none exceed 32k.
 
-### Taskmaster-1 and Taskmaster-2
-- **Tier**: **3.** Human transcription of recorded speech, and **no audio is released**, so it cannot be re-ASR'd into tier 1. Disfluencies were only partially preserved (transcribers *"sometimes corrected them"*), which is precisely the tier-3 failure mode. Channel model required before use as training text.
-- **Why it is kept anyway**: tier governs its use as *text*, not its use as *structure*. Its interaction shape and advisor/customer role labels are what the benchmark needs, and neither is affected by transcript cleanliness.
-- **Source**: https://github.com/google-research-datasets/Taskmaster
-- **Licence**: **CC BY 4.0**, verified 2026-07-29 against each release's own README, which states it directly: *"made available under the Creative Commons Attribution 4.0 License."* Commercial use permitted, derivatives redistributable, attribution required.
-- **Track**: P
-- **Why**: **this is what closes the Track P dyadic gap.** Both are two-person *spoken* dialogue collected by Wizard of Oz, with crowdsourced workers as the customer and **trained call centre operators as the assistant**. That is the advisor/customer interaction shape, from real humans talking, at a scale nothing else on Track P offers.
-- **Size measured 2026-07-29**: **22,807 dialogues, 475,398 turns, 8,102,358 tokens** (ModernBERT-large over `Transcript.render()`). Split: tm1-woz 5,503; tm2 flights 2,481, food-ordering 1,050, hotels 2,357, movies 3,056, music 1,603, restaurant-search 3,276, sports 3,481. The source README claims 5,507 spoken for TM-1 and 17,289 for TM-2; the measured figures are 5,503 (four dialogues contain no utterances at all and are dropped) and 17,304. Measured numbers are used here.
-- **Roles**: `ASSISTANT` → `Role.ADVISOR`, `USER` → `Role.CUSTOMER`. Measured 257,480 advisor turns, 217,863 customer turns, 55 unknown. **The first corpus here that populates roles at all**, which matters for any question whose answer depends on who said something.
-- **Token-length distribution per dialogue**: min 7 / p25 240 / **p50 321** / p75 439 / p90 564 / p95 640 / p99 828 / max 2,389. Unimodal, tight, right-skewed. Fraction exceeding 512: 15.0%; 1,024: **0.3%**; 2,048: **0.0%**.
-- **Consequence, and it is the important one**: these dialogues are **short**, and their length range is almost **disjoint from AMI's** (7–2,389 here against 1,375–29,605 there). So Track P now has dyadic conversation, but only at the short end; there is still **no permissively-licensed dyadic corpus at the long context this project targets**. The constructive reading is that this is what makes multi-call *case* construction possible: a realistic case is several calls, and concatenating short real dialogues reaches case-scale length without truncating anything or inventing filler.
-- **Domains**: TM-1 pizza ordering, auto repair, ride service, movie tickets, coffee, restaurant reservations. TM-2 restaurants, food ordering, movies, hotels, flights, music, sports.
-- **Audio available**: **no.** Transcripts only. So this cannot serve as ASR channel-fitting reference data, which is why it does not on its own replace AMI or HarperValleyBank.
-- **Transcripts**: human transcription of recorded speech. Disfluencies are **partially** preserved — the TM-1 README says they were *"usually transcribed as spoken, but sometimes transcribers corrected them."* Treat disfluency density here as a **lower bound**, and do not fit channel-model statistics on it.
-- **Preprocessing the loader applies**: only the spoken files are downloaded; `self-dialogs.json` is never fetched and `load_file` refuses a path matching it. Turn indices are rebuilt from position rather than trusting the corpus `index` field. Blank-text utterances are dropped rather than emitted as empty lines; dialogues left with no turns are dropped entirely.
-- **Known quality problems**: task-oriented consumer service, not financial advice, so the domain is wrong even though the interaction shape is right. Wizard of Oz means the assistant knew they were role-playing. **55 utterances carry real text under an empty speaker label** — these keep their text and are marked `UNKNOWN` rather than dropped, since dropping would renumber every later line. Four TM-1 dialogues are empty. The written self-dialogue half of TM-1 is the live trap: same record schema, typed prose, and nothing downstream would detect the substitution.
-- **Status**: **ingested.** Loader written and tested (10 tests), full corpus parsed and measured. Not yet used in any training run.
+The recogniser is the AMI-ASR system of **February 2007** (measured WER 0.395 against the manual layer). That error rate is far above a modern recogniser's and it emits no punctuation or casing, so a channel fitted on it over-noises and under-punctuates relative to the modern commercial ASR this project targets; see the calibration note in [`SYNTHSHEET.md`](SYNTHSHEET.md).
 
-### HarperValleyBank
-- **Tier**: **2.** Ships per-speaker audio, so we can run ASR over it ourselves and produce tier 1 dyadic banking text. The shipped `human_transcript` is tier 3 and becomes a second channel-fitting reference point, giving a modern recogniser to set against AMI's 2007 one.
-- **Source**: https://github.com/cricketclub/gridspace-stanford-harper-valley — paper [arXiv:2010.13929](https://arxiv.org/abs/2010.13929)
-- **Licence**: **CC BY 4.0**, verified 2026-07-29 by reading the `LICENSE` file in the repository itself, not the GitHub API's detected label. Commercial use permitted, derivatives redistributable, attribution required. The paper separately describes it as *"a free, public domain spoken dialog corpus"*; the file in the repository is the operative statement and it is CC BY 4.0. Both are permissive, so the track is P either way.
-- **Track**: P
-- **Why**: the only Track P corpus that is dyadic, spoken, **in a consumer banking domain**, and **ships audio**. It is the closest public analogue on the permissive track to the target task, and the only permissive source that can calibrate an ASR channel model on two-party call audio rather than meeting-room audio.
-- **Size (as stated by the source)**: **1,446 conversations, ~23 hours of audio, 59 speakers**, vocabulary about 700 unique words. Token count: TBD.
-- **Audio available**: **yes**, per-speaker single-channel WAV, alongside human transcripts. This is what makes it valuable out of proportion to its size.
-- **Transcripts**: human, in a `human_transcript` field, with word-level timings and, unusually, a **`speaker_role` field distinguishing agent from caller**. This is the first corpus here that can populate `Role.ADVISOR` / `Role.CUSTOMER` rather than leaving every turn `UNKNOWN`.
-- **Known quality problems, and they are serious**: the calls are **simulated**, produced for a Stanford course by speakers following assigned scripts across eight task types. The ~700-word vocabulary is the tell: this is templated speech, not spontaneous conversation. **Use it for acoustics, role structure and channel fitting; do not use it as a language-modelling corpus and do not let its lexical statistics into anything measuring disfluency naturalness.**
-- **Status**: **licence decided, not ingested.**
+Known quality problems: speaker labels are meeting roles, not service roles, so role identification supervision is absent; scenario meetings are role-played; one speaker has segments but no word stream and is skipped. The meetings are multi-party (4–5 speakers), which the target distribution's own multi-speaker character makes less of a mismatch than a strict two-party framing would suggest, though the register is a meeting, not a service call.
 
-### CFPB Consumer Complaint Database
-- **Tier**: **3**, and the weakest kind: written narratives that were never spoken at all. Usable only with the channel model applied, and even then it models *written complaint prose passed through a recogniser*, which nobody ever says out loud. Justification: it is the only large public source of real financial-complaint content, and complaint identification is one of the three priority question families.
-- **Source**: https://www.consumerfinance.gov/data-research/consumer-complaints/
-- **Licence**: US government public domain (to verify)
-- **Track**: P
-- **Why**: real financial complaint narratives with product taxonomy and company response outcome
-- **Audio available**: no
-- **Transcripts**: **written, not spoken** — requires the ASR channel model before use as transcript-like text
-- **Size**: ~2M records with narratives. Token count: TBD
-- **Status**: not ingested
+**Examples** (ASR layer, one speaker's decoded stream, verbatim):
 
-### Earnings-21 / Earnings-22
-- **Tier**: **2.** Audio available, so ASR can be run over it. Worth revisiting if the channel model needs more reference data than AMI provides.
-- **Source**: https://arxiv.org/abs/2203.15591
-- **Licence**: free-to-use (to verify)
-- **Track**: P
-- **Why**: financial spoken English, accent diversity
-- **Audio available**: yes — usable for channel-model fitting
-- **Transcripts**: human
-- **Size**: 119h (Earnings-22). Token count: TBD
-- **Status**: not ingested
+1. `Okay Hi how do you do the summary is it So are you basing um certain threshold a half or a special to us Okay Oh that's the old old one okay I Okay Um Uh-huh So you want to send steve the prototype and we should change the data now`
 
-### FineWeb-Edu / Ettin open corpus
-- **Tier**: **3.** Written web text, never spoken. Justification: Arm E needs 3B tokens per corpus and all the real ASR text in existence under a permissive licence is roughly 300x short of that, so there is no tier 1 or 2 route to this arm. E1 uses it clean and E2 uses the identical documents channel-noised, which is what makes the comparison controlled.
-- **Source**: HuggingFace
-- **Licence**: ODC-By (to verify)
-- **Track**: P
-- **Why**: generic web text for the arm E control corpus
-- **Audio available**: no
-- **Transcripts**: n/a, written text
-- **Size**: sampled to match the transcript corpus token count exactly (arm E requires token matching)
-- **Status**: not ingested
+## Taskmaster-1 and Taskmaster-2
 
-## Track NC
+- **Role:** the Track P supply of two-party spoken service dialogue with advisor/customer role labels; short, so several compose into one multi-call case without truncation · **Path:** `data/raw/taskmaster/` (8 JSON files, spoken subsets only) · **Tokens:** see summary · **Size:** 152 MB
+- **License:** CC-BY-4.0, verified 2026-07-29 against each release's own README: *"made available under the Creative Commons Attribution 4.0 License."* · **Source:** https://github.com/google-research-datasets/Taskmaster
 
-### AnnoMI
-- **Tier**: **3** as distributed (human transcription). Nominally tier 2 since the source videos are public, but the underlying-video rights problem below means we cannot use the audio either, so the tier is moot until the licence question is resolved.
-- **Source**: https://github.com/uccollab/AnnoMI
-- **Licence**: **none stated — undeterminable.** Checked 2026-07-29: the official repository has no `LICENSE` file, the GitHub API reports `license: None`, and the README states no terms of use, only a request to cite two papers. The Future Internet 2023 article (DOI [10.3390/fi15030110](https://doi.org/10.3390/fi15030110)) is Gold OA under CC BY, but **that licenses the article, not the separately-distributed dataset**.
-- **Track**: **NC** — by the ambiguity rule, not by a positive non-commercial licence.
-- **Second, independent problem**: the transcripts are of third-party motivational-interviewing demonstration videos that the AnnoMI authors did not create. They can license their own annotations; they cannot unilaterally license the underlying spoken content. So even an explicit CC BY on the repository would not by itself make the transcript text commercially portable, which is what Track P is meant to guarantee.
-- **Third-party claims are not evidence**: a HuggingFace mirror tags the data `openrail`. That is not the authors' release, and OpenRAIL is use-restricted, so it would fail the Track P test even if it were authoritative.
-- **Why it still matters**: expert-annotated counselling dialogues, the closest public proxy for disclosure of health and life-event difficulty. Losing it from Track P weakens the commercially-portable track precisely on **vulnerability**, one of the three priority question families. That cost is real and is recorded here rather than absorbed quietly.
-- **Route to Track P**: an explicit licence statement from the authors covering the dataset, *plus* a resolution of the underlying-video rights. Both would be needed; the first alone is not sufficient.
-- **Audio available**: source videos are public; transcripts are the released artefact
-- **Transcripts**: human, expert-annotated per utterance
-- **Size**: 133 transcripts, ~9.7k utterances. Token count: TBD
-- **Status**: not ingested
+22,807 two-person spoken dialogues collected Wizard-of-Oz style: crowdworkers as customers, **trained call-centre operators as assistants**. Domains: pizza, auto repair, rides, movies, coffee, restaurants (TM-1); restaurants, food ordering, movies, hotels, flights, music, sports (TM-2). Roles map cleanly (257,480 assistant turns, 217,863 user turns, 55 unlabelled with real text, kept as unknown). Per-dialogue token lengths (2026-07-29): min 7 / p50 321 / p99 828 / max 2,389.
 
-### CallCenterEN
-- **Tier**: **unresolved, and now blocking.** Whether these transcripts are human or ASR decides whether the corpus is tier 1 (the closest public analogue to the target distribution, usable directly) or tier 3 (needing the channel model). Resolve before writing the loader.
-- **Source**: https://arxiv.org/abs/2507.02958 — `AIxBlock/92k-real-world-call-center-scripts-english`
-- **Licence**: **CC BY-NC 4.0**
-- **Track**: NC
-- **Why**: by far the closest public analogue to the target distribution
-- **Audio available**: no (transcripts released)
-- **Transcripts**: PII-redacted; whether human or ASR is **unconfirmed** and needs checking, since it determines whether this can serve as channel-fitting reference data
-- **Size**: 91,706 conversations / 10,448 audio hours. Token count: TBD
-- **Notes**: already PII-redacted, which interacts with the anonymisation head — redaction artefacts must not be learned as PII patterns
-- **Status**: not ingested
+**Tier 3**: human transcription, no audio released, and the TM-1 README concedes disfluencies were *"usually transcribed as spoken, but sometimes transcribers corrected them"* — treat its disfluency density as a lower bound and never fit channel statistics on it. The written self-dialogue half of TM-1 (`self-dialogs.json`) is typed prose in the same schema and must never be ingested. Four TM-1 dialogues are empty and are dropped.
 
-### SPGISpeech 1.0 + 2.0
-- **Tier**: **2.** Audio available. Note the transcripts are *fully formatted* professional output, which is further from ASR than ordinary human-verbatim text, so the human side is a poor channel reference even though the audio is a good tier 1 source.
-- **Source**: https://arxiv.org/abs/2104.02014, https://arxiv.org/abs/2508.05554
-- **Licence**: free for non-commercial use
-- **Track**: NC
-- **Why**: professionally transcribed financial speech at scale
-- **Audio available**: yes — usable for channel-model fitting, but only for NC-track outputs
-- **Transcripts**: professional human, fully formatted
-- **Size**: 5,000h + 3,780h. Token count: TBD
-- **Status**: not ingested
+**Examples** (one utterance per line in the source; truncated):
 
-### MediaSum
-- **Tier**: **3.** Interview transcripts, human-produced. Used for summary supervision on Arm B rather than as distribution-matched training text, so the tier matters less here than usual.
-- **Source**: https://arxiv.org/abs/2103.06410
-- **Licence**: research use only
-- **Track**: NC
-- **Why**: the only large transcript-to-summary corpus; trains the summary head
-- **Audio available**: no
-- **Transcripts**: broadcast interview transcripts
-- **Size**: 463.6K transcripts with summaries. Token count: TBD
-- **Notes**: summaries are topic descriptions, not justifications of a verdict. Useful for summary-head pretraining, **not** a substitute for task-specific summary supervision
-- **Status**: not ingested
+1. `ASSISTANT: Hi there! How can I help?` / `USER: Oh well, I've tried to go see Aquaman in Reno, Nevada.` *(tm1-woz, movie-tickets)*
+2. `USER: Hello. I'd like to find a round trip commercial airline flight from San Francisco to Denver.` / `ASSISTANT: San Francisco to Denver, got it.` *(tm2-flights)*
 
-### BETOLD
-- **Tier**: **TBD**, with the licence. Resolve both together.
-- **Source**: to confirm
-- **Licence**: research use (to verify)
-- **Track**: NC
-- **Why**: human-agent phone dialogues with breakdown labels, as a dissatisfaction proxy
-- **Audio available**: no
-- **Size**: 13,524 dialogues. Token count: TBD
-- **Status**: not ingested
+## AppTek Call-Center Dialogues (wave 2)
+
+- **Role:** benchmark case text and the modern-recogniser channel reference. **Never training text**: beyond the SA licence, the dataset card states it is *"intended exclusively for evaluation and analysis rather than model training"* and lists training under out-of-scope use; that intent is honoured here even though CC BY-SA does not legally impose it. · **Path:** `data/raw/apptek_callcenter/` · **Tokens:** TBD (tokenizer not yet chosen post-reset; measured 2026-08-31: 1,278,110 words over 94,679 speaker-labelled segments in 873 calls) · **Size:** 52.2 GB stated (audio downloading; transcripts 25 MB on disk)
+- **License:** CC-BY-SA-4.0, verified 2026-08-31 in the dataset card's own metadata and Dataset Description (`license: cc-by-sa-4.0`; "License: CC BY 4.0-SA"). **SA flag**: derivatives released from this data must carry the licence forward. Ungated. · **Source:** https://huggingface.co/datasets/apptek-com/apptek_callcenter_dialogues — paper arXiv:2604.27543
+- **Procured:** found in the 2026-08-31 corpus survey (tranche 1, item 1). Downloaded pinned to revision `b98967d9` (2026-08-25) via `scripts/download_apptek.py` (metadata first, then `--what all` for audio). Two configs: `test/<accent>/` split-channel WAV, one file per speaker (1,746 files), and `diarization/<accent>/` merged mono per call (873 files) with timestamped, role-labelled segments. Processing module: TBD.
+
+Spontaneous **role-played agent–customer calls**, newly recorded for the benchmark (no overlap with public web corpora), 128.6 h of speech across 156 speakers, 14 accent groups (~8–11 h each, incl. en-GB, Scottish, Welsh, Irish) and 16 service domains (banking, insurance, energy, telecoms, health…). Strictly two speakers per call with stable `agent`/`customer` role labels; 5–15 min per call, mean 10.4 min. Measured words per call: min 273 / p25 1,090 / p50 1,380 / p75 1,790 / p95 2,414 / max 3,413 — so single calls are short-to-mid length and several compose into one multi-call case.
+
+Transcripts are **fully manual verbatim transcription** (no pre-generated ASR), with disfluency markup preserved: hesitations as `(um)`, partial words with `~`. Tier 2: the per-speaker split-channel audio is what self-ASR runs over (planned: Whisper large-v3 and Parakeet, logged per file), producing tier 1 text whose alignment against the verbatim side fits the v2 channel model ([`SYNTHSHEET.md`](SYNTHSHEET.md)).
+
+Known quality problems: role-played rather than real customers, so scenario stakes are simulated; the transcription normalisation used for the corpus's own WER scoring (`word_mappings.py`) removes selected hesitation tokens, so channel fitting must use the raw `text` field, not the normalised form; exactly two speakers per call, so multi-party structure has to come from other sources.
+
+**Examples** (diarization config, `en-GB`, verbatim incl. disfluency markup; truncated):
+
+1. `customer: Okay, nice to meet you. I'm just calling in regards to the new (um) new program that you have, could I please ask some questions about that?`
+2. `agent: So the n~ new (um) organize sale , organic certification program that'll be providing (um) of.`
+3. `customer: Yeah, so I'm just calling to ask about the new organic certification program for cro~ crops that you're providing?`
+
+## ACI-Bench (wave 2)
+
+- **Role:** vulnerability (health-driver) benchmark case text, and a second paired channel reference: the `src_experiment_data` folder ships **the same encounters as real ASR output, ASR-corrected text, and human transcripts** · **Path:** `data/raw/aci_bench/data/aci-bench/` · **Tokens:** TBD (measured 2026-08-31: 269,523 dialogue words over 207 encounters; words per encounter in `train` min 628 / p50 1,240 / max 3,050) · **Size:** 9.5 MB (whole repo clone)
+- **License:** CC-BY-4.0, verified 2026-08-31 by reading the `LICENSE` file in the clone (Creative Commons Attribution 4.0 International, full text). The GitHub API reports "Other/NOASSERTION", which is wrong; the file governs. ACI-Bench encounters are synthetic role-plays created by clinicians and annotators, so no third-party text rights lurk underneath. · **Source:** https://github.com/microsoft/clinical_visit_note_summarization_corpus — paper: Nature Scientific Data 10, 586 (2023)
+- **Procured:** found in the 2026-08-31 corpus survey (tranche 1, item 3). Cloned by `scripts/download_aci_bench.sh`, commit `293e454` pinned by the kept `.git`. The repo states it is static and will not change. Processing module: TBD.
+
+207 doctor–patient visit dialogues (the longest public visit dialogues), role-played and then actually recorded and ASR-transcribed for the `aci` subset. **Tier 1 evidence**: `src_experiment_data/*_aci_asr.csv` is raw recogniser output (lowercase, unpunctuated, visible attribution errors), with `*_aci_asrcorr.csv` the corrected version of the same encounters and `*_virtscribe_asr.csv` / `*_virtscribe_humantrans.csv` a second paired style; joinable by `encounter_id`. The `challenge_data` splits carry cleaned dialogue plus the full clinical note (a summary-supervision bonus) and metadata (patient name, age, complaints).
+
+Known quality problems: US-clinical register rather than UK financial advice; role-played patients; `[doctor]`/`[patient]` speaker tags rather than diarised `SPEAKER_NN`; small (207 encounters).
+
+**Examples** (`test1_aci_asr`, verbatim ASR layer; truncated):
+
+1. `[doctor] hey charles i'm using this cool new recording device to help me with my documentation is that okay with you [patient] sure [doctor] awesome how are you doing today`
+2. `[doctor] so jerry is a 45 -year-old male who came in today with an ankle injury jerry what happened` *(asrcorr layer of the same subset)*
+
+## MTS-Dialog (wave 2, on disk, not used)
+
+- **Role:** ⚠️ not used · **Path:** `data/raw/aci_bench/data/mts-dialog/` (arrives inside the ACI-Bench clone) · **License:** repo CC-BY-4.0, but the `NOTICE` file records the underlying mtsamples.com terms: *"feel free to print, share, link, and distribute… please notify us, and please give credit"*. That grants distribution with attribution but says nothing explicit about commercial use or derivatives, so by the ambiguity rule this subcollection is **Track NC** despite the repo licence.
+- **Why it ended up unused.** 1.7k short written doctor/patient snippets (tier 3) whose only edge over ACI-Bench was being permissive; with the track downgraded it adds nothing ACI-Bench and the NC counselling corpora don't cover better. Revisit only if mtsamples grants explicit terms.
+
+## CourtListener oral arguments (wave 2)
+
+- **Role:** the Track P long-context tier 1 source: real ASR text at the document lengths this project targets, which nothing else permissive provides · **Path:** `data/raw/courtlistener/<court>/transcripts.jsonl` · **Tokens:** TBD. Measured 2026-08-31: **scotus** complete, 11,150,036 words over 1,001 arguments (per-argument words min 5,327 / p25 9,589 / p50 10,327 / p75 11,889 / p95 16,772 / p99 20,558 / max 26,864 — unimodal, right-skewed, none under 500 words); **cadc** (DC Circuit) complete, 17,896,752 words over 2,604 arguments (min 237 / p50 6,048 / p95 13,528 / max 24,721; one record under 500 words); **ca1** (First Circuit) complete, 13,338,323 words over 2,913 arguments (p50 4,303 / max 21,889; five records under 500 words — inspect and drop empties at preprocessing). Combined: **42,385,111 words over 6,518 arguments**, no duplicate ids within any court. Roughly 76k further transcribed circuit arguments remain available; pulling them is a token-budget decision recorded in the survey queue · **Size:** 234 MB
+- **License:** public domain. Free Law Project's bulk-data page marks its data free of known copyright restrictions, and Supreme Court oral-argument recordings are US federal government works. Sourced from the CourtListener API directly, not from Oyez (whose wrapper is CC BY-NC). · **Source:** https://www.courtlistener.com/api/rest/v4/audio/ (`docket__court=scotus`, `stt_status=1`)
+- **Procured:** found in the 2026-08-31 corpus survey. Pulled by `scripts/download_courtlistener.py` (cursor-resumable, honours `Retry-After` on the anonymous rate limit; polite 10 s page interval). `stt_source=1` on every record: CourtListener's own Whisper-family transcription. MP3 `download_url` kept per record so a local diarised ASR pass remains possible later. Processing module: TBD.
+
+Sustained 20–90 minute two-sided argument between advocates and the bench: spontaneous, interrupted, high-register spoken English, transcribed by a real recogniser with restored punctuation. **Limitations, stated plainly**: the transcript field is flat text with no speaker turns (diarisation requires the audio, deferred under the tier-1-first policy), the register is formal advocacy rather than service calls, and it is not advisor/customer in role. It is used as long-context pretraining distribution, never as benchmark case text.
+
+**Examples** (record 104587, verbatim; truncated):
+
+1. `We'll hear argument next in Case 24-889, Hikma Pharmaceuticals v. Amarin Pharma. Mr. Klein. Thank you, Mr. Chief Justice, and may it please the Court. Under Section 271B of the Patent Act, selling a product suited for both infringing and substantial non-infringing uses is lawful, unless the seller actively induces the infringing use.`
+
+## MeetingBank (wave 2)
+
+- **Role:** the NC track's long-context tier 1 text, and summary supervision (each record pairs a transcript with a human summary) · **Path:** `data/raw/meetingbank/` (`{train,validation,test}.json`, JSONL despite the extension) · **Tokens:** TBD (measured 2026-08-31: 19,921,133 words over 6,892 records; words per record min 69 / p50 986 / p95 12,093 / max 67,634) · **Size:** 110 MB
+- **License:** CC-BY-NC-SA-4.0 (dataset card) → **Track NC**. · **Source:** https://huggingface.co/datasets/huuuyeah/meetingbank — paper ACL 2023
+- **Procured:** ranked 5th of the remaining tier 1 sources 2026-08-31; downloaded via `scripts/download_meetingbank.py` (ungated). Audio (`huuuyeah/MeetingBank_Audio`) deliberately not fetched. Processing module: TBD.
+
+1,366 US city-council meetings (3,579 h) transcribed by Speechmatics: modern ASR with restored punctuation and casing. **This HF distribution is per agenda item, not per meeting** — `uid` encodes `council_date_item`, so whole meetings are reconstructable by grouping, which is where the ~28k-token documents come from. **No speaker labels in these files**: the diarised segment layer ships with the audio release, so as downloaded this is long flat tier 1 text. Register is formal civic proceedings, not service calls.
+
+**Examples** (train, verbatim; truncated):
+
+1. `Please refrain from profane or obscene speech. Direct your comments to council as a whole and refrain from individual or personal attacks. Councilwoman Gilmore, will you please put Council Bill 161 on the floor? Yes, President Brooks, I move that council bill 161 as amended, be placed upon final consideration and do pass.`
+
+## CallCenterEN (wave 2)
+
+- **Role:** the NC track's in-domain anchor: real customer-service telephone calls in modern commercial ASR, the closest public match to the target distribution · **Path:** `data/raw/callcenteren/` (11 domain zips of per-call JSON) · **Tokens:** TBD (95,953 call JSONs on disk; 1,650-call sample: mean 1,068 words and 589 s audio per call, p50 752 / p95 2,850 / max 12,633 words) · **Size:** 1.4 GB
+- **License:** CC-BY-NC-4.0 (dataset card) → **Track NC**. Found **ungated** 2026-08-31, contrary to the survey's expectation. · **Source:** https://huggingface.co/datasets/AIxBlock/92k-real-world-call-center-scripts-english — paper arXiv:2507.02958
+- **Procured:** ranked 1st of the remaining tier 1 sources 2026-08-31; downloaded via `scripts/download_callcenteren.py`. Domains: medicare (largest, 61,513 calls), home services, automotive, insurance inbound/outbound, general customer service, medical equipment. Audio is withheld by the publisher (biometric privacy), so there is no tier-2 path. Processing module: TBD.
+
+Per-call JSON: flat `text`, overall `confidence`, `audio_duration`, word-level timings, and the list of redacted PII policies. Confirms the survey's tier resolution: this is AssemblyAI ASR output with restored punctuation and casing (the paper states 0.1% was human-reviewed at WER 3.87%).
+
+Known quality problems, and they matter: **no speaker turns** — the `speaker` field is null on every sampled word, so agent and customer sentences are interleaved in one stream and turn structure would have to be inferred; **PII is replaced in-band with bracketed placeholders** (`[PERSON_NAME]`, `[ORGANIZATION]`, `[DATE]`…), often repeated per word of the redacted span, which is both a redaction artefact that must not be learned as a PII pattern and a systematic distortion of exactly the identifier-dictation phenomena this project cares about; the file count (95,953) exceeds the paper's 91,706 conversations because two "(reupload)" zips overlap the originals — dedupe by transcript id at preprocessing.
+
+**Examples** (medicare_inbound, verbatim; truncated):
+
+1. `Thank you for calling [ORGANIZATION] [ORGANIZATION] [ORGANIZATION]. This is [PERSON_NAME]. How can I help you today? Hi, I'm looking to get a grooming appointment. I had filled out paperwork yesterday and left a message to be called or texted back. Sure, just give me one second. Let me pull up your account.`
+
+## Channel artifact v1 (pipeline artifact)
+
+- **Role:** ⚠️ reference only — superseded for synthesis once a modern-recogniser channel is fitted · **Path:** `data/channel/ami_channel_v1.json` · **Size:** 4 MB
+- **Generated by:** the pre-reset `asr_channel` fit over the 126 paired AMI meetings (942,880 reference words): WER 0.3946 (sub 0.2524, del 0.0791, ins 0.0631), 88,849 distinct substitution pairs. Kept as the measured record of a 2007-era recogniser's error profile and as a severity upper bound; **why it is not used for synthesis**: the target distribution is modern commercial ASR with restored punctuation and casing, which this channel neither models nor approximates. The refit plan is in [`SYNTHSHEET.md`](SYNTHSHEET.md).
+
+Keep this file current when a dataset is added, removed, or re-scoped.
