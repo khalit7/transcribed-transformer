@@ -4,7 +4,13 @@ version = "0.1.0"
 description = "Compliance QA over ASR call transcripts: decoder vs encoder-decoder vs API baseline"
 requires-python = ">=3.11"
 dependencies = [
+    "faster-whisper>=1.2.1",
     "huggingface_hub>=0.34",
+    "nvidia-cublas-cu12>=12.9.2.10",
+    "nvidia-cudnn-cu12>=9.25.1.1",
+    "pyarrow>=25.0.1",
+    "scipy>=1.17.1",
+    "soundfile>=0.14.0",
 ]
 
 [tool.uv]
