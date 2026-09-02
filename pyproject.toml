@@ -9,9 +9,15 @@ dependencies = [
     "nvidia-cublas-cu12>=12.9.2.10",
     "nvidia-cudnn-cu12>=9.25.1.1",
     "pyarrow>=25.0.1",
+    "rapidfuzz>=3.14.6",
     "scipy>=1.17.1",
     "soundfile>=0.14.0",
 ]
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
