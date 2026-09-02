@@ -42,6 +42,8 @@ Scope: **speech transcripts only.** Chat logs, scanned documents and emails are 
 
 Both trained arms are continued-pretrained on transcript-like text before task fine-tuning, which is where hypothesis 2 enters; the data, its licence tracks and its provenance are recorded in [`data/DATASHEET.md`](data/DATASHEET.md), with the corpus survey in [`data/SURVEYSHEET.md`](data/SURVEYSHEET.md) and the transcript-synthesis recipes in [`data/SYNTHSHEET.md`](data/SYNTHSHEET.md).
 
+All three are scored on the same benchmark: cases built from public call corpora, questions with explicit answer options and grading rules, labels partly by construction (phenomena written into calls at known lines) and partly by LLM judgement, each call in a clean and a real-ASR variant so the cost of transcription noise is measured directly. The generator and its data format are documented in [`src/synthesis/README.md`](src/synthesis/README.md) and the DATASHEET's Benchmarking section.
+
 Results are recorded, never estimated; negative results get written up the same as positive ones.
 
 This is independent research on public data. It is motivated by a class of problem common in regulated industries, and it contains no proprietary data, systems or findings from any employer. Licensed under [Apache 2.0](LICENSE).

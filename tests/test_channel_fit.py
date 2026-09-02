@@ -3,7 +3,26 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.channel.fit import align, new_stats, normalise, wer
+from rapidfuzz.distance import Levenshtein
+
+from src.channel.fit import align, clusters, new_stats, normalise, wer
+
+
+def test_clusters_group_adjacent_ops_into_spans():
+    ref = ["i'm", "gonna", "call", "you"]
+    hyp = ["i'm", "going", "to", "call", "you", "bye", "now"]
+    got = list(clusters(Levenshtein.editops(ref, hyp), ref, hyp))
+    assert (["gonna"], ["going", "to"]) in got          # sub + adjacent insert = one span
+    assert ([], ["bye", "now"]) in got                  # trailing insertion run = one phrase
+    assert len(got) == 2
+
+
+def test_align_records_span_edits_and_file_wer():
+    s = new_stats()
+    align(["i'm", "gonna", "call"], ["i'm", "going", "to", "call"], s)
+    assert s["span_edits"][("gonna", "going to")] == 1
+    assert s["span_counts"]["gonna call"] == 1
+    assert s["file_wers"] == [round(2 / 3, 4)]
 
 
 def test_normalise_hesitation_and_partials():

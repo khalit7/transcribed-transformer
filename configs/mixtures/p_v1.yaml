@@ -1,0 +1,15 @@
+# Track P pretraining mixture, v1 (2026-09-02).
+# Purpose: the first permissive continued-pretraining pool. Tier 1 only:
+# CourtListener (long-form, flat) and the AMI ASR layer once its module exists.
+# Taskmaster is tier 3 and stays OUT until a channel passes the gate (SYNTHSHEET).
+# Tokenizer is provisional (Qwen3, ungated decoder candidate); every arm repacks
+# with its own tokenizer and meta.json records which.
+# Pack: uv run python -m src.preprocessing.pack configs/mixtures/p_v1.yaml
+stage: p_v1
+track: track-p
+tokenizer: Qwen/Qwen3-1.7B
+sources:
+  - path: data/interim/courtlistener/train.jsonl
+    repeat: 1
+val_sources:
+  - path: data/interim/courtlistener/val.jsonl

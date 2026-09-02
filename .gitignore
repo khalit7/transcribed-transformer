@@ -1,9 +1,13 @@
-# Data: ignore everything, keep only the sheets
+# Data: ignore everything, keep only the sheets and the releasable benchmark
 data/**
 !data/
 !data/DATASHEET.md
 !data/SURVEYSHEET.md
 !data/SYNTHSHEET.md
+# Benchmark: nothing under data/benchmark/ is tracked. The authored question
+# bank's source of truth is src/synthesis/question_bank.py (tracked); the JSONL
+# files mix licence tracks (NC text from SPoRC cannot be redistributed), and a
+# releasable Track P copy is produced by `python -m src.synthesis.export --track p`.
 
 # Model weights and checkpoints
 checkpoints/
@@ -34,6 +38,7 @@ wandb/
 *.private.md
 /private/
 transcript_description*
+assessment*.json
 
 # Python
 __pycache__/

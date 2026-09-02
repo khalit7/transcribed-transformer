@@ -19,7 +19,22 @@ The target is the output of current commercial transcription pipelines, whose be
 |---|---|---|---|
 | `channel_v2_degraded` | `data/channel/channel_v2_degraded.json` | faster-whisper large-v3 over telephone-degraded AppTek split-channel audio vs its verbatim transcripts: all 1,746 files, 1,276,030 reference words | **fitted 2026-09-02** (`python -m src.channel.fit`). Pooled WER 0.2764 (sub 0.0931 / del 0.0847 / ins 0.0985); per-accent WER 0.2359 (en-AU) to 0.3411 (en-CN) |
 | `channel_v2_clean` | `data/channel/channel_v2_clean.json` | same pairs, no degradation | **fitted 2026-09-02**. Pooled WER 0.2677 (sub 0.0881 / del 0.0738 / ins 0.1058); accents 0.2380 (en-CA) to 0.3462 (en-CN) |
+| `channel_v2_degraded_holdout10` | `data/channel/channel_v2_degraded_holdout10.json` | as degraded, with 91 whole calls (182 files) held out by stem hash | the QC-gate fit; **gate FAILED** (below) |
 | later | TBD | Parakeet as second system; PriMock57 + ACI-Bench pairs pooled in | queued |
+
+### Apply side and gate results (2026-09-02)
+
+`src/channel/apply.py` implements the word-edit layer; `src/channel/gate.py` implements gate 2 in its controlled form: for held-out calls, REAL = Whisper's actual normalised hypothesis, SYNTHETIC = the channel applied to the same file's verbatim reference (same speech, same speaker), discriminator = TF-IDF word 1–2-grams + char 3–5-grams into logistic regression, grouped 5-fold CV by call, out-of-fold AUC. Power control: the same discriminator separating real from *un-noised* verbatim reaches **AUC 0.919**, so it has teeth.
+
+| Channel version | What changed | Synthetic WER vs ref (real: 0.274) | Filler /1k (real: 6.6) | **AUC real vs synthetic** |
+|---|---|---|---|---|
+| v2 word-independent | per-token del/sub/ins sampled independently | 0.257 | 5.9 | **0.866** |
+| v2.1 spans | contiguous edit clusters as units (`gonna`→`going to`), insertion phrases, per-file burstiness | 0.160 (under-noised) | 12.6 | **0.754** |
+| v2.2 | word involvement for 1-gram rates, WER calibration, duplicate suppression, longer spans, no fragment fallback | 0.288 | 3.9 | **0.760** |
+
+**Verdict: gate not passed (bar AUC ≤ 0.65).** Marginals are matched (unigram rates within ~5%, WER within 0.015), and the span model removed the isolated-half-of-a-phrase artefacts the word model produced, but a context-free channel plateaus around 0.76: what remains separable is that real errors are acoustically and linguistically plausible *in context* (coherent collocations like `and then`, `all right`), while independently sampled edits are not. Uniform WER calibration also distorts the edit mix (over-deletes, under-fills), which is a second signal.
+
+**Consequence**: route A stays **blocked** for training use — Taskmaster and other tier-3 text do not enter any mixture on this channel. Next attempts, in order of promise: (1) a learned channel — a small seq2seq model trained verbatim→hypothesis on the 1.28M paired words already on disk, which captures context by construction; (2) context-conditioned substitution sampling (neighbour-word conditioning, or LM rescoring of candidate outputs); (3) reconsider whether AUC ≤ 0.65 on a *same-speech* comparison is the right bar, versus a downstream-utility test. The self-ASR route (tier 2 → tier 1) is unaffected and remains the reliable source of messy text.
 
 **Finding from the clean/degraded comparison (2026-09-02)**: the telephone chain (8 kHz + band-pass + mu-law) added only ~0.9 WER points (0.2677 → 0.2764) — Whisper large-v3 is nearly indifferent to band-limiting alone. Two readings, both actionable: (a) most of the measured "error" is not acoustic misrecognition but *convention mismatch* between verbatim transcription and Whisper's style (filler deletion, `gonna`→`going to`, numeral rendering) — which is fine for the channel, since the verbatim→ASR-style transformation *is* what it models, but the headline number should not be read as pure recognition error; (b) if harsher acoustic error is wanted, band-limiting is not the lever — codec round-trips and additive noise (pending ffmpeg/MUSAN) are the untested steps.
 
@@ -52,6 +67,8 @@ A synthetic corpus enters a training mixture only after both gates:
 ## 7. Where the output goes
 
 Synthetic documents land in `data/interim/<source>-synth/` with the channel or pipeline version stamped per document, get a DATASHEET row when first mixed, and are packed like any other source. Tracks are inherited from the source text; TTS/ASR tooling licences are recorded alongside.
+
+**Current consumer of the channel**: the benchmark generator (`src/synthesis/`) noises injected lines in messy transcript variants with `channel_v2_degraded` plus a crude surface restoration; for sources without audio (Taskmaster, ACI-Bench) the whole messy variant is channel output. This is accepted for v0 with the gate failure on record; TTS→ASR replaces it when built.
 
 ## 8. State
 

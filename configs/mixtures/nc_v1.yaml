@@ -1,0 +1,20 @@
+# Track NC pretraining mixture, v1 (2026-09-02).
+# Purpose: the research-only continued-pretraining pool. Tier 1 only:
+# SPoRC conversational episodes (turn-structured, the backbone), CallCenterEN
+# (in-domain service calls, flat), MeetingBank (whole meetings, flat).
+# Tokenizer is provisional (Qwen3); see p_v1.yaml.
+# Pack: uv run python -m src.preprocessing.pack configs/mixtures/nc_v1.yaml
+stage: nc_v1
+track: track-nc
+tokenizer: Qwen/Qwen3-1.7B
+sources:
+  - path: data/interim/sporc/train.jsonl
+    repeat: 1
+  - path: data/interim/callcenteren/train.jsonl
+    repeat: 1
+  - path: data/interim/meetingbank/train.jsonl
+    repeat: 1
+val_sources:
+  - path: data/interim/sporc/val.jsonl
+  - path: data/interim/callcenteren/val.jsonl
+  - path: data/interim/meetingbank/val.jsonl
