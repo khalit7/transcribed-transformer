@@ -72,8 +72,8 @@ def summarise(judgements: list[dict], by_labeller: dict, labellers: list[str]) -
             na_fail = sum(1 for j, x in g if j["judge_answer"] == "fail" and x["answer"] == "NA")
             fail_na = sum(1 for j, x in g if j["judge_answer"] == "NA" and x["answer"] == "fail")
             ev = sum(x["evidence"] for _, x in g) / len(g)
-            jac = [jaccard(by_labeller[m][j["id"]].label.evidence, j["judge_evidence"]) for j, _ in g]
-            jac = [v for v in jac if v is not None]
+            jac = [v for v in (jaccard(by_labeller[m][j["id"]].label.evidence, j["judge_evidence"]) for j, _ in g)
+                   if v is not None]
             sm = sum(x["summary"] for _, x in g) / len(g)
             tg = [x["tags"] for _, x in g if x["tags"] is not None]
             print(f"{m:14s} {acc:7.2f} {(f'{rare:.2f} ({len(rare_rows)})' if rare is not None else '-'):>9s} {na_fail:8d} {fail_na:8d} "
@@ -94,8 +94,8 @@ def compare_human(judgements: list[dict], human: list[dict], labellers: list[str
     hj = {h["id"]: h for h in human}
     pairs = [(j, hj[j["id"]]) for j in judgements if j["id"] in hj]
     print(f"\n== judge vs human on {len(pairs)} pairs the human graded")
-    agree = collections.Counter()
-    n = collections.Counter()
+    agree: collections.Counter[str] = collections.Counter()
+    n: collections.Counter[str] = collections.Counter()
     for j, h in pairs:
         for m in labellers:
             if m not in j["grades"] or m not in h["grades"]:

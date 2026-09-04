@@ -24,8 +24,8 @@ def test_is_val_is_deterministic_and_roughly_two_percent():
 
 
 def test_document_rejects_bad_track_and_tier():
-    ok = dict(source="x", doc_id="1", asr_system=None, has_speakers=False,
-              n_turns=0, n_words=1, text="a")
+    ok = {"source": "x", "doc_id": "1", "asr_system": None, "has_speakers": False,
+          "n_turns": 0, "n_words": 1, "text": "a"}
     Document(track="track-p", tier=1, **ok)
     with pytest.raises(ValueError):
         Document(track="commercial", tier=1, **ok)

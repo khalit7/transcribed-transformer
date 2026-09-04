@@ -70,9 +70,12 @@ def _parse(resp: dict, q: Question, n_lines: int) -> Label:
                  tags=tags, confidence=conf)
 
 
-def label(case: Case, q: Question, model: str, variant: str = "clean") -> tuple[Label, float]:
+def label(case: Case, q: Question, model: str, variant: str = "clean", route: str | int | None = None) -> tuple[Label, float]:
+    """`route` picks the Ollama server when several are configured (default: by call id; a caller that
+    schedules calls can pass a call index so consecutive calls alternate servers)."""
     lines = case.transcript.lines(variant)
-    resp, cost = ask_json(prompt(lines, case.transcript.speakers, q), model, schema_for(q))
+    resp, cost = ask_json(prompt(lines, case.transcript.speakers, q), model, schema_for(q),
+                          route=case.id if route is None else route)
     return _parse(resp, q, len(lines)), cost
 
 
@@ -93,8 +96,8 @@ def ablate(case: Case, q: Question, primary: Label, model: str, variant: str = "
     removed = [ln if (i + 1) not in cited else ln.split(": ", 1)[0] + ": [removed]" for i, ln in enumerate(lines)]
     only = [ln if (i + 1) in cited else ln.split(": ", 1)[0] + ": [removed]" for i, ln in enumerate(lines)]
     total = 0.0
-    r1, c1 = ask_json(prompt(removed, speakers, q), model, schema_for(q)); total += c1
-    r2, c2 = ask_json(prompt(only, speakers, q), model, schema_for(q)); total += c2
+    r1, c1 = ask_json(prompt(removed, speakers, q), model, schema_for(q), route=case.id); total += c1
+    r2, c2 = ask_json(prompt(only, speakers, q), model, schema_for(q), route=case.id); total += c2
     return Ablation(model=model, necessary=r1.get("answer") != primary.answer,
                     sufficient=r2.get("answer") == primary.answer), total
 

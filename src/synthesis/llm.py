@@ -9,7 +9,9 @@ question last so that a caching server can reuse the transcript prefix across
 questions on the same call.
 """
 
+import hashlib
 import json
+import os
 import random
 import re
 import subprocess
@@ -17,7 +19,26 @@ import sys
 import time
 import urllib.request
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+# Ollama endpoints, one per GPU (ollama_servers.ensure_servers() starts them on demand; OLLAMA_URLS overrides).
+# A caller picks one per call (`ollama_url(key)`) so a call's questions share that server's prefix cache.
+# Until `set_ollama_urls` is called, the system service is used.
+OLLAMA_URLS = [u.strip().rstrip("/") + "/api/chat" for u in
+               os.environ.get("OLLAMA_URLS", "http://localhost:11434").split(",") if u.strip()]
+OLLAMA_URL = OLLAMA_URLS[0]
+
+
+def set_ollama_urls(bases: list[str]) -> None:
+    global OLLAMA_URL
+    OLLAMA_URLS[:] = [b.rstrip("/") + "/api/chat" for b in bases]
+    OLLAMA_URL = OLLAMA_URLS[0]
+
+
+def ollama_url(key: str | int | None = None) -> str:
+    """The Ollama endpoint for a routing key (a call id): the same key always maps to the same server."""
+    if key is None or len(OLLAMA_URLS) == 1:
+        return OLLAMA_URLS[0]
+    h = int(hashlib.sha1(str(key).encode()).hexdigest()[:8], 16) if isinstance(key, str) else int(key)
+    return OLLAMA_URLS[h % len(OLLAMA_URLS)]
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.DOTALL)
 # rate limit (429), usage-cap ("usage limit reached|<unix ts>"), overloaded (529) and similar transient refusals
 _LIMIT = re.compile(r"rate.?limit|usage limit|limit reached|too many requests|\b429\b|\b529\b|overloaded|capacity|try again later", re.IGNORECASE)
@@ -71,13 +92,13 @@ def _claude(prompt: str, name: str, timeout: int) -> tuple[dict, float]:
 
 
 def _ollama(prompt: str, name: str, schema: dict | None, timeout: int, num_ctx: int = 32768,
-            num_predict: int = 2048) -> tuple[dict, float]:
+            num_predict: int = 2048, url: str | None = None) -> tuple[dict, float]:
     # num_predict caps a repetition loop (seen: gemma4:12b emitting a 29k-character summary) so a runaway
     # call fails fast on the JSON parse instead of running to the timeout; a label needs a few hundred tokens
     body = {"model": name, "messages": [{"role": "user", "content": prompt}], "stream": False,
             "format": schema or "json", "think": False,
             "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": num_predict}}
-    req = urllib.request.Request(OLLAMA_URL, data=json.dumps(body).encode(),
+    req = urllib.request.Request(url or OLLAMA_URL, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         content = json.loads(r.read())["message"]["content"]
@@ -85,8 +106,8 @@ def _ollama(prompt: str, name: str, schema: dict | None, timeout: int, num_ctx: 
 
 
 def ask_json(prompt: str, model: str, schema: dict | None = None, retries: int = 2,
-             timeout: int = 1800) -> tuple[dict, float]:
-    """One labelling prompt. Malformed output is retried `retries` times immediately; a limit or
+             timeout: int = 1800, route: str | int | None = None) -> tuple[dict, float]:
+    """One labelling prompt. `route` (e.g. the call id) picks the Ollama server when several are configured. Malformed output is retried `retries` times immediately; a limit or
     overload refusal (claude backend) is waited out instead: sleep until the reported reset if the
     CLI gives one, otherwise exponential backoff from 30 s to 10 min, for up to LIMIT_MAX_WAIT in
     total, so a run pauses on a limit rather than failing every remaining pair in minutes."""
@@ -97,7 +118,9 @@ def ask_json(prompt: str, model: str, schema: dict | None = None, retries: int =
     delay = 30.0
     while True:
         try:
-            return _claude(prompt, name, timeout) if backend == "claude" else _ollama(prompt, name, schema, timeout)
+            if backend == "claude":
+                return _claude(prompt, name, timeout)
+            return _ollama(prompt, name, schema, timeout, url=ollama_url(route))
         except LLMLimit as e:
             if waited >= LIMIT_MAX_WAIT:
                 raise LLMError(f"limit not cleared after {waited / 60:.0f} min: {e}") from e

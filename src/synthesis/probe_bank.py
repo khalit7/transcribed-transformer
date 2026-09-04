@@ -59,7 +59,7 @@ def main() -> None:
         if src in ID_STREAMS:
             ids = list(itertools.islice(ID_STREAMS[src](), int(n) * 6))
             chosen = set(rng.sample(ids, min(int(n), len(ids))))
-            calls += list(BUILDERS[src](only=chosen))
+            calls += list(BUILDERS[src](only=chosen))  # type: ignore[call-arg]  # only sporc has `only`
         else:
             pool = list(itertools.islice(BUILDERS[src](), int(n) * 6))
             calls += rng.sample(pool, min(int(n), len(pool)))

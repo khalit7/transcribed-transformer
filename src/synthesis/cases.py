@@ -141,6 +141,7 @@ def _interim_turns(text: str) -> list[tuple[str, str]]:
 
 
 def taskmaster_cases() -> Iterator[Case]:
+    skipped = 0
     for line in (INTERIM / "taskmaster" / "train.jsonl").open():
         d = json.loads(line)
         turns = _interim_turns(d["text"])
@@ -149,9 +150,11 @@ def taskmaster_cases() -> Iterator[Case]:
         # interim keeps Taskmaster's own ASSISTANT / USER labels as SPEAKER_00 / SPEAKER_01 (preprocessing.taskmaster);
         # undo that here so the verbatim roles are what is rendered
         role_of = {"SPEAKER_00": "assistant", "SPEAKER_01": "user"}
-        unknown = {tag for tag, _ in turns} - set(role_of)
-        if unknown:
-            raise NoSpeakerRoles(f"taskmaster {d['doc_id']}: speaker labels without a corpus role: {sorted(unknown)}")
+        if {tag for tag, _ in turns} - set(role_of):
+            # SPEAKER_02 = an utterance whose speaker field is empty in the raw corpus (preprocessing.taskmaster);
+            # a dialogue with an unattributed turn is skipped rather than rendered with a guessed role
+            skipped += 1
+            continue
         clean = _render([(role_of[tag], text) for tag, text in turns])
         messy = [f"{ln.split(': ', 1)[0]}: {noise_line(ln.split(': ', 1)[1], seed=stable_seed(d['doc_id'], i))}"
                  for i, ln in enumerate(clean)]
@@ -161,6 +164,8 @@ def taskmaster_cases() -> Iterator[Case]:
              Variant(kind="messy", origin="channel v2.2 noised + crude surface restoration (synthetic)", lines=messy)],
             "Taskmaster ASSISTANT / USER labels", {"subset": d["meta"].get("subset", "")},
         )
+    if skipped:
+        print(f"  taskmaster: {skipped} dialogues skipped for an unattributed turn", flush=True)
 
 
 def aci_bench_cases() -> Iterator[Case]:
@@ -223,6 +228,7 @@ def sporc_cases(max_lines: int = 160, identify_model: str | None = None, only: s
             rec = ids.identify(doc_id, turns, model)
             ids.append(rec)
             cache[doc_id] = rec
+            print(f"  sporc {doc_id}: host identified on demand by {model} (${rec['cost_usd']:.2f}) -> {rec['host']}", flush=True)
         if rec["host"] is None:
             print(f"  sporc {doc_id}: no host identified ({rec['reason'][:80]}); skipped", flush=True)
             continue
