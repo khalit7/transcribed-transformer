@@ -1,130 +1,180 @@
-"""Generate benchmark labels.
+"""LLM labelling: pick a transcript at random, ask it every bank question that applies.
 
-    uv run python -m src.synthesis.synth_data <model_name> <generation_size> [options]
+Terminology (see CLAUDE.md): answering a question about a transcript is **LLM labelling** and the
+model doing it is the labeller; assessing how good a label is, is **LLM-as-a-judge** and lives in
+a separate step (grade_labels.py, planned). Nothing in this module judges.
 
-<model_name> goes to `claude -p --model`; <generation_size> is how many calls to label.
+    uv run python -m src.synthesis.synth_data <model> <generation_size> [options]
 
-Per call the plan is:
-  1. one INJECTED label — a bank question (its target answer made true by
-     writing turns in) or, with probability --written-fraction, a question the
-     generator invents for this call together with the turns;
-  2. --as-is-per-call bank questions judged on the final transcript;
-  3. with probability --open-fraction, a question written about the call and judged.
+<model> names the backend and model: `claude:sonnet`, `claude:opus`, `ollama:qwen3:32b`,
+`ollama:llama3.3:70b`, ... <generation_size> is the number of transcripts to process.
 
-Calls rotate over --sources so both licence tracks fill. Output: one
-self-contained record per label in data/benchmark/labelled_data.jsonl;
-data/benchmark/questions.jsonl is regenerated from it afterwards. Resumable:
-calls already labelled are skipped. Release copy: `python -m src.synthesis.export --track p`.
+Each iteration draws a call uniformly at random without replacement, then runs ALL
+bank questions whose `dataset_allow_list` contains the call's dataset (a question is
+not sampled; if it makes sense for that dataset it is asked). For each (call, question)
+pair the labeller answers with evidence first, then answer, summary, confidence and any
+tags, and one self-contained record is written. Pairs already on disk are skipped and the
+transcript selection does not depend on what is on disk, so a re-run after a bank change or an
+interruption fills in only the missing pairs of the same calls. Options add the
+research-backed checks:
+  --verify-model M    a second, preferably different-family labeller answers blind; agreement recorded
+  --ablate            re-label with cited lines removed / kept only; necessity and sufficiency recorded
+  --labeller-variant  clean (default) or messy: which transcript variant the labeller reads
+  --workers N         concurrent labeller calls; defaults to 16 for claude: (independent API calls) and 1
+                      for ollama: (one GPU; extra workers only queue). Verification/ablation calls run
+                      inside the same worker, so an ollama verifier behind a claude labeller is queued too.
+
+Output: data/labelled_data/labelled_data.jsonl (+ questions.jsonl regenerated). Resumable.
+The records serve both training and benchmarking; splitting them is decided downstream.
+Release copy: `python -m src.synthesis.export --track p`.
 """
 
 import argparse
+import collections
+import concurrent.futures
 import datetime as dt
 import json
 import random
 import time
+from pathlib import Path
 
 from src.synthesis.cases import BUILDERS
-from src.synthesis.generate import dumps, generate
-from src.synthesis.llm import LLMError
-from src.synthesis.question_bank import BENCH, QUESTIONS, write_questions
+from src.synthesis.label import ablate, dumps, label, verify
+from src.synthesis.llm import LLMError, split_model
+from src.synthesis.question_bank import OUT_DIR, QUESTIONS, write_questions
 from src.synthesis.schema import Case, Generation, LabelledRecord, Question
 
-FAMILIES = ["vulnerability", "complaint_and_eod", "general_qa"]
-OUT = BENCH / "labelled_data.jsonl"
+OUT = OUT_DIR / "labelled_data.jsonl"
+DEFAULT_WORKERS = 16  # concurrent claude -p calls; the audit probe ran 16 without a single failure
 
 
-def labelled_calls() -> set[str]:
-    if not OUT.exists():
-        return set()
-    return {json.loads(l)["id"].split("::")[0] for l in OUT.open()}
+def existing_pairs(out: Path) -> set[str]:
+    return {json.loads(l)["id"] for l in out.open()} if out.exists() else set()
+
+
+def load_pool(sources: list[str], per_source: int) -> list[Case]:
+    """A fixed pool of calls to draw from (builders stream corpora in a fixed order)."""
+    pool: list[Case] = []
+    for s in sources:
+        it = BUILDERS[s]()
+        for _ in range(per_source):
+            try:
+                pool.append(next(it))
+            except StopIteration:
+                break
+    return pool
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("model")
-    p.add_argument("generation_size", type=int)
-    p.add_argument("--sources", default="apptek,taskmaster,aci_bench,sporc")
-    p.add_argument("--tag-policy", default="random", choices=["random", "agent_first"])
-    p.add_argument("--as-is-per-call", type=int, default=2)
-    p.add_argument("--open-fraction", type=float, default=0.25)
-    p.add_argument("--written-fraction", type=float, default=0.3)
+    p.add_argument("generation_size", type=int, help="number of transcripts to label (each gets every applicable question)")
+    p.add_argument("--sources", default="apptek,taskmaster,aci_bench,sporc",
+                   help="sporc episodes need their host identified (identify_speakers.py, cached; Sonnet on demand otherwise)")
+    p.add_argument("--pool-per-source", type=int, default=200, help="calls loaded per source to draw from")
+    p.add_argument("--labeller-variant", default="clean", choices=["clean", "messy"])
+    p.add_argument("--verify-model", default=None)
+    p.add_argument("--ablate", action="store_true")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--dry-run", action="store_true", help="build calls, call no model")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--workers", type=int, default=None,
+                   help=f"concurrent labeller calls (default {DEFAULT_WORKERS} for claude:, 1 for ollama:)")
+    p.add_argument("--out", type=Path, default=OUT,
+                   help="output file (default data/labelled_data/labelled_data.jsonl); one file per labeller when comparing labellers")
     args = p.parse_args()
+    out: Path = args.out
+
+    if args.workers is None:
+        # claude -p calls are independent API requests; Ollama serialises on the GPU, so more workers only queue
+        args.workers = DEFAULT_WORKERS if split_model(args.model)[0] == "claude" else 1
 
     rng = random.Random(args.seed)
-    sources = args.sources.split(",")
-    iters = {s: BUILDERS[s](args.tag_policy, args.seed) for s in sources}
-    done_calls = labelled_calls()
-    use_count: dict[str, int] = {}
+    pool = load_pool(args.sources.split(","), args.pool_per_source)
+    done_pairs = existing_pairs(out)
+    counts: collections.Counter = collections.Counter()
     total_cost = 0.0
     done = failures = 0
     t0 = time.time()
-    BENCH.mkdir(parents=True, exist_ok=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    i = 0
-    while done < args.generation_size and sources:
-        src = sources[i % len(sources)]
-        i += 1
-        try:
-            case: Case = next(iters[src])
-        except StopIteration:
-            sources.remove(src)
-            continue
-        if case.id in done_calls:
-            continue
-        if args.dry_run:
-            print(f"[dry] {case.id} ({src}) {case.transcript.n_lines} lines, "
-                  f"variants={[v.kind for v in case.transcript.variants]}")
-            done += 1
-            continue
+    # choose the transcripts first (seeded, without replacement, round-robin over datasets so a run of N draws
+    # ~N/len(sources) calls from each), then every applicable unlabelled question of each
+    by_ds: dict[str, list[Case]] = {}
+    for c in pool:
+        by_ds.setdefault(c.dataset, []).append(c)
+    for cs in by_ds.values():
+        rng.shuffle(cs)
+    order = [ds for ds in by_ds]
+    pool = [c for i in range(max(len(cs) for cs in by_ds.values())) for ds in order if i < len(by_ds[ds]) for c in [by_ds[ds][i]]]
+    jobs: list[tuple[Case, Question]] = []
+    calls_done = 0
+    for case in pool:
+        if calls_done >= args.generation_size:
+            break
+        # generation_size counts transcripts in seeded order whether or not they still need work, so a
+        # re-run (resume, or a second labeller into another file) selects exactly the same calls
+        calls_done += 1
+        jobs += [(case, q) for q in QUESTIONS if case.dataset in q.dataset_allow_list and f"{case.id}::{q.id}" not in done_pairs]
 
-        # the plan: (mode, question or None, family for written questions, preferred target)
-        plan: list[tuple[str, Question | None, str | None, str | None]] = []
-        if rng.random() < args.written_fraction:
-            plan.append(("injected", None, rng.choice(FAMILIES), rng.choice(["pass", "fail", "partial_pass"])))
-            injected_q = None
-        else:
-            injected_q = min(QUESTIONS, key=lambda x: (use_count.get(x.id, 0), rng.random()))
-            use_count[injected_q.id] = use_count.get(injected_q.id, 0) + 1
-            prefer = rng.choice([v for v in injected_q.values if v != "NA"])
-            plan.append(("injected", injected_q, None, prefer))
-        others = [x for x in QUESTIONS if x is not injected_q]
-        rng.shuffle(others)
-        plan += [("as_is", x, None, None) for x in others[: args.as_is_per_call]]
-        if rng.random() < args.open_fraction:
-            plan.append(("as_is", None, rng.choice(FAMILIES), None))
+    if args.dry_run:
+        for case, q in jobs:
+            print(f"[dry] {case.id}::{q.id}")
+        print(f"dry run: {calls_done} transcripts, {len(jobs)} labels, workers={args.workers}")
+        return
 
-        records: list[LabelledRecord] = []
-        for mode, question, family, prefer in plan:
+    def work(case: Case, q: Question) -> tuple[LabelledRecord, float, str]:
+        """Label one pair (plus optional verification and ablation); returns record, cost, log suffix."""
+        lab, cost = label(case, q, args.model, args.labeller_variant)
+        ver = abl = None
+        extra = ""
+        if args.verify_model:
             try:
-                case, q, label, cost = generate(case, mode, args.model, question=question, family=family, prefer=prefer)
+                ver, c = verify(case, q, lab, args.verify_model, args.labeller_variant); cost += c
+                extra += f" verify={'agree' if ver.agrees else 'DISAGREE'}"
+            except (LLMError, ValueError, KeyError) as e:
+                extra += f" verify failed: {str(e)[:80]}"
+        if args.ablate:
+            try:
+                abl, c = ablate(case, q, lab, args.model, args.labeller_variant); cost += c
+                extra += f" ablate=nec:{abl.necessary} suf:{abl.sufficient}"
+            except (LLMError, ValueError, KeyError) as e:
+                extra += f" ablation failed: {str(e)[:80]}"
+        rec = LabelledRecord(
+            id=f"{case.id}::{q.id}", dataset=case.dataset, source_id=case.source_id, track=case.track, question=q,
+            transcript=case.transcript, label=lab, verification=ver, ablation=abl, meta=case.meta,
+            generation_info=Generation(name=args.model, labelled_variant=args.labeller_variant, cost_usd=round(cost, 5),
+                                       timestamp=dt.datetime.now(dt.UTC).isoformat(timespec="seconds")),
+        )
+        return rec, cost, extra
+
+    # records are appended as they complete (order differs from submission; ids make that irrelevant)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex, out.open("a") as f:
+        futures = {ex.submit(work, case, q): (case, q) for case, q in jobs}
+        for fut in concurrent.futures.as_completed(futures):
+            case, q = futures[fut]
+            rid = f"{case.id}::{q.id}"
+            try:
+                rec, cost, extra = fut.result()
             except (LLMError, ValueError, KeyError) as e:
                 failures += 1
-                print(f"  {mode} {(question.id if question else family)} failed: {str(e)[:120]}", flush=True)
-                if mode == "injected":
-                    records = []
-                    break  # a call without its injected label is not worth keeping
+                print(f"  {rid}: label failed: {str(e)[:120]}", flush=True)
                 continue
+            f.write(dumps(rec) + "\n")
+            f.flush()
             total_cost += cost
-            gen = Generation(name=args.model, mode=mode, cost_usd=round(cost, 5),
-                             timestamp=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
-            records.append(LabelledRecord.build(case, q, label, gen))
-        if not records:
-            continue
-
-        with OUT.open("a") as f:
-            for r in records:
-                f.write(dumps(r) + "\n")
-        done_calls.add(case.id)
-        done += 1
-        first = records[0]
-        print(f"[{done}/{args.generation_size}] {case.id} ({src}) injected={first.question.id}:{first.label.answer} "
-              f"labels={len(records)} cost=${total_cost:.3f}", flush=True)
+            counts[(q.family, rec.label.answer)] += 1
+            done += 1
+            print(f"[{done}/{len(jobs)}] {rid} -> {rec.label.answer} ev={rec.label.evidence} "
+                  f"conf={rec.label.confidence}{extra} cost=${total_cost:.3f}", flush=True)
 
     n_q = write_questions()
-    print(f"done: {done} calls, {failures} generator failures, ${total_cost:.3f}, {time.time() - t0:.0f}s; "
-          f"questions.jsonl regenerated ({n_q} questions) -> {BENCH}")
+    print(f"done: {calls_done} transcripts, {done} labels, {failures} failures, ${total_cost:.3f}, "
+          f"{time.time() - t0:.0f}s, workers={args.workers} -> {out}; questions.jsonl regenerated ({n_q})")
+    if counts:
+        print("answers by family:")
+        for fam in sorted({f for f, _ in counts}):
+            print(f"  {fam:14s} " + "  ".join(f"{a}={counts[(fam, a)]}" for a in ("pass", "partial_pass", "fail", "NA")))
 
 
 if __name__ == "__main__":

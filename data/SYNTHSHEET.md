@@ -68,7 +68,7 @@ A synthetic corpus enters a training mixture only after both gates:
 
 Synthetic documents land in `data/interim/<source>-synth/` with the channel or pipeline version stamped per document, get a DATASHEET row when first mixed, and are packed like any other source. Tracks are inherited from the source text; TTS/ASR tooling licences are recorded alongside.
 
-**Current consumer of the channel**: the benchmark generator (`src/synthesis/`) noises injected lines in messy transcript variants with `channel_v2_degraded` plus a crude surface restoration; for sources without audio (Taskmaster, ACI-Bench) the whole messy variant is channel output. This is accepted for v0 with the gate failure on record; TTS→ASR replaces it when built.
+**Current consumer of the channel**: the benchmark case builder (`src/synthesis/cases.py`) produces the messy transcript variant for sources without audio (Taskmaster, ACI-Bench) with `channel_v2_degraded` plus a crude surface restoration. Accepted for v0 with the gate failure on record; TTS→ASR replaces it when built. (Injection of synthetic turns was removed from the generator on 2026-09-03, so the channel no longer touches any real-ASR variant.)
 
 ## 8. State
 

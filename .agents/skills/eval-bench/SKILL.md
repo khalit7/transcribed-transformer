@@ -31,7 +31,7 @@ Report set-level recall and F1 **only where the key is marked exhaustive** (`Ass
 
 **Summary** — faithfulness to the cited evidence, judged against a rubric. A summary that is fluent, correct-sounding and not entailed by the lines it cites scores zero. Hallucinated evidence is the most damaging failure mode available here, because it makes a wrong answer look well-supported.
 
-**Pin the judge model version and record it as a wandb artifact** alongside the benchmark version. Judge drift silently invalidates every score taken before it, and nothing in the numbers reveals that it happened. LLM judges have other known failure modes here too, notably truncation on long inputs, which quietly flatters models that fail late in a transcript; verify the judge sees the whole input before trusting any ranking.
+**Pin the judge model version (the LLM-as-a-judge that scores summaries; never confuse it with the labeller that produced the benchmark's labels) and record it as a wandb artifact** alongside the benchmark version. Judge drift silently invalidates every score taken before it, and nothing in the numbers reveals that it happened. LLM judges have other known failure modes here too, notably truncation on long inputs, which quietly flatters models that fail late in a transcript; verify the judge sees the whole input before trusting any ranking.
 
 ## Reporting slices
 

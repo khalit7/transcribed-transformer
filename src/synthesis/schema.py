@@ -1,28 +1,33 @@
-"""Benchmark record types.
+"""Labelled-data record types.
 
-On disk the benchmark is `labelled_data.jsonl` (one LabelledRecord per label: the
-transcript, the question, the label, and how it was generated) plus
-`questions.jsonl`, which is derived from it (the bank in code + every question
-written for a call). `Case` is the in-memory build type the generator works on.
+On disk, `data/labelled_data/labelled_data.jsonl` holds one LabelledRecord per
+label (the transcript, the question, the label, and how it was generated) and
+`questions.jsonl` is derived from the bank in code. The same records serve
+training and benchmarking; how they are split is decided downstream, not here.
+`Case` is the in-memory build type the generator works on.
 
 A transcript is one call in one or more line-aligned variants: every variant
 has the same number of lines and line i is the same turn in each, so one
-evidence key (1-based line numbers) serves all of them. Speaker tags are
-`SPEAKER_NN`; the role behind each tag is hidden metadata, never rendered.
+evidence key (1-based line numbers) serves all of them. Every line is
+`<role>: text` where the role is the corpus's own speaker label, verbatim
+(AppTek `agent`/`customer`, Taskmaster `assistant`/`user`, ACI-Bench
+`doctor`/`patient`); a corpus without role labels cannot be built until a policy
+for it is decided (cases.NoSpeakerRoles).
 
-Evidence keys are never guaranteed complete, injected labels included: the
-inserted lines certainly support the answer, but the original call may contain
-further supporting lines that were not checked for. Score evidence as precision
-against the key; recall is not measurable on this benchmark.
+Labels are produced by LLM labelling of real calls (the labeller answers; a
+separate LLM-as-a-judge step, when run, assesses the labels). Evidence keys are never guaranteed
+complete: score evidence as precision against the key; a label's optional
+`ablation` record says whether its cited lines were necessary and sufficient
+for the answer, and its optional `verification` record holds a second labeller's
+blind verdict.
 """
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, model_validator
 
 Answer = Literal["pass", "fail", "partial_pass", "NA"]
-Family = Literal["vulnerability", "complaint_and_eod", "general_qa"]
-Mode = Literal["as_is", "injected"]
+Family = Literal["vulnerability", "complaint", "eod", "general_qa"]  # eod = expression of dissatisfaction
 Track = Literal["track-p", "track-nc"]
 
 
@@ -33,11 +38,18 @@ class Option(BaseModel):
 
 class Question(BaseModel):
     id: str
-    source: Literal["bank", "written"]  # reusable bank question, or written for one call
+    source: Literal["bank", "written"] = "bank"  # only bank questions exist in the current flow
     family: Family
     text: str
     description: str = ""
     options: list[Option]
+    # Optional closed vocabulary the answer must be qualified with (e.g. the
+    # vulnerability characteristics present). Empty = the question takes no tags.
+    tags: list[str] = []
+    # Datasets (source names as in cases.BUILDERS) this question may be asked of.
+    # Service-call conduct questions list the agent/customer corpora; role-agnostic
+    # conversation questions list podcasts too.
+    dataset_allow_list: list[str]
 
     @model_validator(mode="after")
     def _at_least_pass_fail(self) -> "Question":
@@ -56,19 +68,22 @@ class Question(BaseModel):
 class Variant(BaseModel):
     kind: Literal["clean", "messy"]
     origin: str  # which layer produced these lines, e.g. "verbatim", "whisper large-v3 time-aligned"
-    lines: list[str]  # "SPEAKER_NN: text", one turn per line
+    lines: list[str]  # "<role>: text", one turn per line, role verbatim from the corpus
 
 
 class Transcript(BaseModel):
     variants: list[Variant]
-    speaker_roles: dict[str, str]  # hidden: SPEAKER_NN -> agent | customer | other
-    tag_policy: str  # how tags were assigned to roles: random | agent_first
+    speakers: list[str]  # the role labels that occur, verbatim from the corpus, in order of first appearance
+    role_source: str  # where the labels come from, e.g. "corpus role annotation (agent/customer)"
 
     @model_validator(mode="after")
     def _aligned(self) -> "Transcript":
         n = {len(v.lines) for v in self.variants}
         if len(n) != 1:
             raise ValueError(f"variants are not line-aligned: {n}")
+        seen = {ln.partition(": ")[0] for v in self.variants for ln in v.lines}
+        if not seen <= set(self.speakers):
+            raise ValueError(f"lines carry speaker labels not declared in speakers: {seen - set(self.speakers)}")
         return self
 
     @property
@@ -83,6 +98,7 @@ class Transcript(BaseModel):
 class Case(BaseModel):
     """A call ready for labelling (in memory only)."""
     id: str
+    dataset: str  # source name as in cases.BUILDERS: apptek | taskmaster | aci_bench | sporc
     track: Track
     source_id: str  # exactly where the call came from: corpus/config/locale/document
     transcript: Transcript
@@ -93,6 +109,8 @@ class Label(BaseModel):
     answer: Answer
     evidence: list[int]  # 1-based, ascending, de-duplicated; empty when nothing supports
     summary: str
+    tags: list[str] = []  # qualifiers drawn from the question's tag vocabulary, when it has one
+    confidence: float | None = None  # the labeller's own 0-1 confidence; routes low values to human audit
 
     @model_validator(mode="after")
     def _evidence_shape(self) -> "Label":
@@ -103,25 +121,40 @@ class Label(BaseModel):
         return self
 
 
+class Verification(BaseModel):
+    """A second labeller's blind answer to the same (call, question)."""
+    model: str
+    answer: Answer
+    evidence: list[int]
+    tags: list[str] = []
+    agrees: bool  # answer matches the primary label
+
+
+class Ablation(BaseModel):
+    """Does the cited evidence carry the answer? Re-labelled with the cited lines
+    removed (necessary if the answer changes) and with only the cited lines kept
+    (sufficient if the answer holds)."""
+    model: str
+    necessary: bool | None
+    sufficient: bool | None
+
+
 class Generation(BaseModel):
-    name: str  # model passed to claude -p
-    mode: Mode  # injected: turns were written into the call so the answer holds (by construction);
-    #             as_is: the call was judged as it stood (LLM judgement)
+    name: str  # backend:model, e.g. claude:sonnet or ollama:qwen3:32b
+    labelled_variant: str  # which transcript variant the labeller saw: clean | messy
     cost_usd: float
     timestamp: str
 
 
 class LabelledRecord(BaseModel):
     id: str  # "<call_id>::<question_id>"
+    dataset: str
     source_id: str
     track: Track
     question: Question
     transcript: Transcript
     label: Label
     generation_info: Generation
+    verification: Verification | None = None
+    ablation: Ablation | None = None
     meta: dict = {}
-
-    @classmethod
-    def build(cls, case: Case, q: Question, label: Label, gen: Generation) -> "LabelledRecord":
-        return cls(id=f"{case.id}::{q.id}", source_id=case.source_id, track=case.track, question=q,
-                   transcript=case.transcript, label=label, generation_info=gen, meta=case.meta)

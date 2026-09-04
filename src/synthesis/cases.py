@@ -13,16 +13,18 @@ Sources (any conversation between different people qualifies):
   channel v2.2 like Taskmaster (its real ASR layer is not line-aligned).
 - sporc (NC): real diarised ASR from interim; single variant, kind "messy".
 
-Speaker tags are SPEAKER_NN. Which tag the agent gets is decided per case by
-`tag_policy`: "random" (seeded; the model must infer roles, as with real
-diarisation) or "agent_first" (agent is always SPEAKER_00). Roles live only in
-hidden metadata.
+Every line is `<role>: text` with the role label exactly as the corpus records
+it (Khalid, 2026-09-03: always the verbatim roles, never a remapping). AppTek:
+`agent` / `customer`; Taskmaster: `assistant` / `user`; ACI-Bench: `doctor` /
+`patient` (plus whatever other bracketed speaker the dialogue names). SPoRC has
+diarised `SPEAKER_NN` tags only, so its HOST is identified by an LLM first
+(identify_speakers.py, cached) and rendered as `host`; other speakers keep their
+tags. A corpus with no role labels and no identification raises NoSpeakerRoles.
 """
 
 import csv
 import hashlib
 import json
-import random
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -70,31 +72,24 @@ def noise_line(text: str, seed: int) -> str:
     return noised or "<inaudible>"  # a short line deleted wholesale reads as an inaudible turn
 
 
-def assign_tags(roles: list[str], policy: str, rng: random.Random) -> dict[str, str]:
-    """roles -> SPEAKER_NN mapping. Returns tag -> role."""
-    distinct = list(dict.fromkeys(roles))
-    if policy == "agent_first":
-        order = sorted(distinct, key=lambda r: {"agent": 0, "customer": 1}.get(r, 2))
-    else:
-        order = distinct[:]
-        rng.shuffle(order)
-    return {f"SPEAKER_{i:02d}": role for i, role in enumerate(order)}
+class NoSpeakerRoles(RuntimeError):
+    """The corpus records no speaker roles; how to handle role-less transcripts is undecided."""
 
 
-def _render(turns: list[tuple[str, str]], tag_of_role: dict[str, str]) -> list[str]:
-    return [f"{tag_of_role[role]}: {text}" for role, text in turns]
+def _render(turns: list[tuple[str, str]]) -> list[str]:
+    return [f"{role}: {text}" for role, text in turns]
 
 
-def _case(id: str, track: str, source_id: str, variants: list[Variant], tags: dict[str, str],
-          policy: str, meta: dict) -> Case:
-    return Case(id=id, track=track, source_id=source_id,
-                transcript=Transcript(variants=variants, speaker_roles=tags, tag_policy=policy), meta=meta)
+def _case(id: str, track: str, source_id: str, variants: list[Variant], role_source: str, meta: dict) -> Case:
+    dataset = source_id.split("/")[0].replace("apptek_callcenter", "apptek")
+    speakers = list(dict.fromkeys(ln.partition(": ")[0] for v in variants for ln in v.lines))
+    return Case(id=id, dataset=dataset, track=track, source_id=source_id,
+                transcript=Transcript(variants=variants, speakers=speakers, role_source=role_source), meta=meta)
 
 
 # ---------------------------------------------------------------- AppTek
 
-def apptek_cases(policy: str, seed: int) -> Iterator[Case]:
-    rng = random.Random(seed)
+def apptek_cases() -> Iterator[Case]:
     hyp_root = INTERIM / "apptek_callcenter_selfasr" / "diarization-degraded"
     for meta in sorted((RAW / "apptek_callcenter" / "diarization").glob("*/metadata.jsonl")):
         locale = meta.parent.name
@@ -120,21 +115,18 @@ def apptek_cases(policy: str, seed: int) -> Iterator[Case]:
                     buckets[j - 1].append(w["word"].strip())
                 else:
                     buckets[j].append(w["word"].strip())
-            roles = [s["role"] for s in segs]
-            tags = assign_tags(roles, policy, rng)
-            role_tag = {r: t for t, r in tags.items()}
-            clean = _render([(s["role"], s["text"].strip()) for s in segs], role_tag)
-            messy = _render(
-                [(s["role"], " ".join(b) if b else "<inaudible>") for s, b in zip(segs, buckets)],
-                role_tag,
-            )
+            if any(not s.get("role") for s in segs):
+                raise NoSpeakerRoles(f"apptek {stem}: a segment has no role label")
+            clean = _render([(s["role"], s["text"].strip()) for s in segs])
+            messy = _render([(s["role"], " ".join(b) if b else "<inaudible>") for s, b in zip(segs, buckets)])
             yield _case(
                 f"apptek-{stem}", "track-p", f"apptek_callcenter/diarization/{locale}/{stem}",
                 [Variant(kind="clean", origin="AppTek verbatim segments", lines=clean),
                  Variant(kind="messy", lines=messy,
                          origin="faster-whisper large-v3 over telephone-degraded audio, time-aligned to the verbatim turns "
                                 f"(interim/apptek_callcenter_selfasr/diarization-degraded/{locale}/{stem}.json)")],
-                tags, policy, {"locale": locale, "domain": row.get("domain", ""), "duration_s": row.get("duration")},
+                "AppTek segment role annotation (agent / customer)",
+                {"locale": locale, "domain": row.get("domain", ""), "duration_s": row.get("duration")},
             )
 
 
@@ -148,30 +140,30 @@ def _interim_turns(text: str) -> list[tuple[str, str]]:
     return out
 
 
-def taskmaster_cases(policy: str, seed: int) -> Iterator[Case]:
-    rng = random.Random(seed)
+def taskmaster_cases() -> Iterator[Case]:
     for line in (INTERIM / "taskmaster" / "train.jsonl").open():
         d = json.loads(line)
         turns = _interim_turns(d["text"])
         if len(turns) < 8:
             continue
-        role_of = {"SPEAKER_00": "agent", "SPEAKER_01": "customer", "SPEAKER_02": "other"}
-        roles = [role_of.get(t, "other") for t, _ in turns]
-        tags = assign_tags(roles, policy, rng)
-        role_tag = {r: t for t, r in tags.items()}
-        clean = _render([(r, t) for r, (_, t) in zip(roles, turns)], role_tag)
+        # interim keeps Taskmaster's own ASSISTANT / USER labels as SPEAKER_00 / SPEAKER_01 (preprocessing.taskmaster);
+        # undo that here so the verbatim roles are what is rendered
+        role_of = {"SPEAKER_00": "assistant", "SPEAKER_01": "user"}
+        unknown = {tag for tag, _ in turns} - set(role_of)
+        if unknown:
+            raise NoSpeakerRoles(f"taskmaster {d['doc_id']}: speaker labels without a corpus role: {sorted(unknown)}")
+        clean = _render([(role_of[tag], text) for tag, text in turns])
         messy = [f"{ln.split(': ', 1)[0]}: {noise_line(ln.split(': ', 1)[1], seed=stable_seed(d['doc_id'], i))}"
                  for i, ln in enumerate(clean)]
         yield _case(
             f"taskmaster-{d['doc_id']}", "track-p", f"taskmaster/{d['meta'].get('subset', '')}/{d['doc_id']}",
             [Variant(kind="clean", origin="Taskmaster human transcription (partially repaired disfluencies)", lines=clean),
              Variant(kind="messy", origin="channel v2.2 noised + crude surface restoration (synthetic)", lines=messy)],
-            tags, policy, {"subset": d["meta"].get("subset", "")},
+            "Taskmaster ASSISTANT / USER labels", {"subset": d["meta"].get("subset", "")},
         )
 
 
-def aci_bench_cases(policy: str, seed: int) -> Iterator[Case]:
-    rng = random.Random(seed)
+def aci_bench_cases() -> Iterator[Case]:
     csv.field_size_limit(10**8)
     root = RAW / "aci_bench" / "data" / "aci-bench" / "challenge_data"
     for path in sorted(root.glob("*.csv")):
@@ -181,39 +173,72 @@ def aci_bench_cases(policy: str, seed: int) -> Iterator[Case]:
             for r in csv.DictReader(f):
                 turns = []
                 for ln in r["dialogue"].split("\n"):
-                    m = re.match(r"\[(doctor|patient|\w+)\]\s*(.*)", ln.strip(), re.I)
+                    m = re.match(r"\[(doctor|patient|\w+)\]\s*(.*)", ln.strip(), re.IGNORECASE)
                     if m and m.group(2).strip():
-                        role = {"doctor": "agent", "patient": "customer"}.get(m.group(1).lower(), "other")
-                        turns.append((role, m.group(2).strip()))
+                        turns.append((m.group(1).lower(), m.group(2).strip()))
                 if len(turns) < 8:
                     continue
-                tags = assign_tags([r_ for r_, _ in turns], policy, rng)
-                role_tag = {r_: t for t, r_ in tags.items()}
-                clean = _render(turns, role_tag)
                 doc_id = f"{path.stem}-{r.get('encounter_id') or r.get('ID')}"
+                clean = _render(turns)
                 messy = [f"{ln.split(': ', 1)[0]}: {noise_line(ln.split(': ', 1)[1], seed=stable_seed(doc_id, i))}"
                          for i, ln in enumerate(clean)]
                 yield _case(
                     f"aci-{doc_id}", "track-p", f"aci_bench/challenge_data/{doc_id}",
                     [Variant(kind="clean", origin="ACI-Bench challenge_data dialogue (cleaned)", lines=clean),
                      Variant(kind="messy", origin="channel v2.2 noised + crude surface restoration (synthetic)", lines=messy)],
-                    tags, policy, {"split_file": path.stem},
+                    "ACI-Bench bracketed speaker labels ([doctor] / [patient])", {"split_file": path.stem},
                 )
 
 
-def sporc_cases(policy: str, seed: int, max_lines: int = 160) -> Iterator[Case]:
+def sporc_episodes(max_lines: int = 160) -> Iterator[tuple[str, list[tuple[str, str]], dict]]:
+    """Eligible SPoRC episodes in builder order: (doc_id, [(SPEAKER_NN, text)], meta)."""
     for line in (INTERIM / "sporc" / "train.jsonl").open():
         d = json.loads(line)
         if d["meta"].get("n_speakers", 0) not in (2, 3) or not (30 <= d["n_turns"] <= max_lines):
             continue
-        turns = _interim_turns(d["text"])
-        tags = {t: "other" for t in dict.fromkeys(t for t, _ in turns)}
+        yield d["doc_id"], _interim_turns(d["text"]), {"pod_title": d["meta"].get("pod_title", ""),
+                                                        "category": d["meta"].get("category", "")}
+
+
+def sporc_cases(max_lines: int = 160, identify_model: str | None = None, only: set[str] | None = None) -> Iterator[Case]:
+    """SPoRC ships diarised `SPEAKER_NN` labels and no roles, so the host is identified first
+    (identify_speakers.py, cached on disk; identified on demand here for any uncached episode
+    with `identify_model`, default claude:sonnet; pass "" to forbid identification, in which case an
+    uncached episode raises NoSpeakerRoles). The host's lines render as `host:`; the other speakers
+    keep their diarisation tags. Episodes whose host could not be identified are skipped with a
+    notice, never rendered role-less. `only` restricts to a set of case ids (sporc-<doc_id>) so a
+    sampler can pick episodes by position in the raw stream and pay for identification only on
+    those it uses."""
+    from src.synthesis import identify_speakers as ids
+
+    cache = ids.load_cache()
+    model = ids.DEFAULT_MODEL if identify_model is None else identify_model
+    for doc_id, turns, meta in sporc_episodes(max_lines):
+        if only is not None and f"sporc-{doc_id}" not in only:
+            continue
+        rec = cache.get(doc_id)
+        if rec is None:
+            if not model:
+                raise NoSpeakerRoles(f"sporc {doc_id}: no speaker roles and host identification is disabled")
+            rec = ids.identify(doc_id, turns, model)
+            ids.append(rec)
+            cache[doc_id] = rec
+        if rec["host"] is None:
+            print(f"  sporc {doc_id}: no host identified ({rec['reason'][:80]}); skipped", flush=True)
+            continue
+        host = rec["host"]
+        lines = [f"{'host' if t == host else t}: {x}" for t, x in turns]
         yield _case(
-            f"sporc-{d['doc_id']}", "track-nc", f"sporc/episode/{d['doc_id']}",
-            [Variant(kind="messy", origin="SPoRC Whisper + diarisation (real ASR)", lines=[f"{t}: {x}" for t, x in turns])],
-            tags, policy, {"pod_title": d["meta"].get("pod_title", ""), "category": d["meta"].get("category", "")},
+            f"sporc-{doc_id}", "track-nc", f"sporc/episode/{doc_id}",
+            [Variant(kind="messy", origin="SPoRC Whisper + diarisation (real ASR)", lines=lines)],
+            f"host identified by {rec['model']} (confidence {rec['confidence']}); other speakers keep diarisation tags",
+            {**meta, "host_tag": host},
         )
 
+
+# cheap id streams in the same order as the builder's raw stream, for samplers that must pick by
+# position without building (and, for sporc, without paying to identify) every candidate
+ID_STREAMS = {"sporc": lambda: (f"sporc-{d}" for d, _, _ in sporc_episodes())}
 
 BUILDERS = {
     "apptek": apptek_cases,

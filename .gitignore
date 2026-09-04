@@ -4,7 +4,7 @@ data/**
 !data/DATASHEET.md
 !data/SURVEYSHEET.md
 !data/SYNTHSHEET.md
-# Benchmark: nothing under data/benchmark/ is tracked. The authored question
+# Labelled data: nothing under data/labelled_data/ is tracked. The question
 # bank's source of truth is src/synthesis/question_bank.py (tracked); the JSONL
 # files mix licence tracks (NC text from SPoRC cannot be redistributed), and a
 # releasable Track P copy is produced by `python -m src.synthesis.export --track p`.
