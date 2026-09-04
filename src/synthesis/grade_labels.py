@@ -35,8 +35,9 @@ import random
 import string
 from pathlib import Path
 
+from src.synthesis import llm
 from src.synthesis.label import numbered
-from src.synthesis.llm import LLMError, ask_json
+from src.synthesis.llm import LLMError, ask_json, set_claude_account
 from src.synthesis.question_bank import OUT_DIR
 from src.synthesis.schema import LabelledRecord
 
@@ -162,7 +163,7 @@ def grade_pair(pid: str, by_labeller: dict[str, dict[str, LabelledRecord]], judg
     return {"id": pid, "dataset": rec.dataset, "question_id": rec.question.id, "family": rec.question.family, "judge": judge,
             "judge_answer": resp["judge_answer"], "judge_evidence": sorted({int(x) for x in resp.get("judge_evidence", []) if 1 <= int(x) <= rec.transcript.n_lines}),
             "judge_tags": [t for t in resp.get("judge_tags", []) if t in rec.question.tags],
-            "order": dict(zip(letters, names)), "grades": grades, "cost_usd": round(cost, 5),
+            "order": dict(zip(letters, names)), "grades": grades, "cost_usd": round(cost, 5), "claude_account": llm.CLAUDE_ACCOUNT,
             "timestamp": dt.datetime.now(dt.UTC).isoformat(timespec="seconds")}
 
 
@@ -174,7 +175,10 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--name", default=None, help="output name (default <judge>_<sample>)")
     p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--claude-account", "--claude_account", dest="claude_account", choices=["p", "w"], default=None,
+                   help="which Claude account claude -p bills: p (personal) or w (work); default: the environment's")
     args = p.parse_args()
+    set_claude_account(args.claude_account)
 
     by_labeller = load(args.files)
     pids = sample_pairs(by_labeller, args.sample, args.seed)

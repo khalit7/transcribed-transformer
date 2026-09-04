@@ -144,6 +144,7 @@ class Generation(BaseModel):
     labelled_variant: str  # which transcript variant the labeller saw: clean | messy
     cost_usd: float
     timestamp: str
+    claude_account: str | None = None  # "p" | "w" for claude: labellers (which account was billed); None otherwise
 
 
 class LabelledRecord(BaseModel):

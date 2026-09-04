@@ -18,7 +18,7 @@ import json
 import random
 
 from src.synthesis.cases import BUILDERS, ID_STREAMS
-from src.synthesis.llm import ask_json
+from src.synthesis.llm import ask_json, set_claude_account
 from src.synthesis.question_bank import QUESTIONS
 from src.synthesis.schema import Case
 
@@ -38,7 +38,10 @@ def main() -> None:
     p.add_argument("--ids", default=None, help="comma-separated question ids to probe (default: whole family)")
     p.add_argument("--dataset", default=None, help="only questions whose dataset_allow_list includes this dataset")
     p.add_argument("--workers", type=int, default=1, help="concurrent labeller calls (use >1 with claude:, not ollama:)")
+    p.add_argument("--claude-account", "--claude_account", dest="claude_account", choices=["p", "w"], default=None,
+                   help="which Claude account claude -p bills: p (personal) or w (work); default: the environment's")
     args = p.parse_args()
+    set_claude_account(args.claude_account)
 
     qs = [q for q in QUESTIONS if args.family == "all" or q.family == args.family]
     if args.ids:

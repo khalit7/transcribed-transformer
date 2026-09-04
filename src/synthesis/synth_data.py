@@ -27,6 +27,7 @@ research-backed checks:
   --verify-model M    a second, preferably different-family labeller answers blind; agreement recorded
   --ablate            re-label with cited lines removed / kept only; necessity and sufficiency recorded
   --labeller-variant  clean (default) or messy: which transcript variant the labeller reads
+  --claude-account p|w which Claude account `claude -p` bills (personal or work); recorded on each record
   --workers N         concurrent labeller calls; defaults to 16 for claude: (independent API calls) and, for
                       ollama:, to one per GPU: an Ollama server pinned to each GPU is started on demand and
                       reused (ollama_servers.py). Verification/ablation calls run inside the same worker.
@@ -47,7 +48,13 @@ from pathlib import Path
 
 from src.synthesis.cases import BUILDERS
 from src.synthesis.label import ablate, dumps, label, verify
-from src.synthesis.llm import OLLAMA_URLS, LLMError, set_ollama_urls, split_model
+from src.synthesis.llm import (
+    OLLAMA_URLS,
+    LLMError,
+    set_claude_account,
+    set_ollama_urls,
+    split_model,
+)
 from src.synthesis.ollama_servers import ensure_servers, gpu_count
 from src.synthesis.question_bank import OUT_DIR, QUESTIONS, write_questions
 from src.synthesis.schema import Case, Generation, LabelledRecord, Question
@@ -91,10 +98,13 @@ def main() -> None:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--workers", type=int, default=None,
                    help=f"concurrent labeller calls (default {DEFAULT_WORKERS} for claude:, 1 for ollama:)")
+    p.add_argument("--claude-account", "--claude_account", dest="claude_account", choices=["p", "w"], default=None,
+                   help="which Claude account claude -p bills: p (personal) or w (work); default: the environment's")
     p.add_argument("--out", type=Path, default=OUT,
                    help="output file (default data/labelled_data/labelled_data.jsonl); one file per labeller when comparing labellers")
     args = p.parse_args()
     out: Path = args.out
+    set_claude_account(args.claude_account)
     families = [f.strip() for f in args.families.split(",") if f.strip()]
     unknown = set(families) - set(FAMILIES)
     if not families or unknown:
@@ -184,7 +194,8 @@ def main() -> None:
             id=f"{case.id}::{q.id}", dataset=case.dataset, source_id=case.source_id, track=case.track, question=q,
             transcript=case.transcript, label=lab, verification=ver, ablation=abl, meta=case.meta,
             generation_info=Generation(name=args.model, labelled_variant=used_variant, cost_usd=round(cost, 5),
-                                       timestamp=dt.datetime.now(dt.UTC).isoformat(timespec="seconds")),
+                                       timestamp=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+                                       claude_account=args.claude_account if split_model(args.model)[0] == "claude" else None),
         )
         return rec, cost, extra
 

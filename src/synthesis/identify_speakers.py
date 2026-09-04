@@ -20,7 +20,8 @@ import concurrent.futures
 import datetime as dt
 import json
 
-from src.synthesis.llm import ask_json
+from src.synthesis import llm
+from src.synthesis.llm import ask_json, set_claude_account
 from src.synthesis.question_bank import OUT_DIR
 
 DEFAULT_MODEL = "claude:sonnet"
@@ -75,6 +76,7 @@ def identify(doc_id: str, turns: list[tuple[str, str]], model: str = DEFAULT_MOD
         "doc_id": doc_id, "host": host,
         "confidence": min(1.0, max(0.0, float(conf))) if isinstance(conf, (int, float)) else None,
         "reason": str(resp.get("reason", "")).strip()[:300], "model": model, "cost_usd": round(cost, 5),
+        "claude_account": llm.CLAUDE_ACCOUNT,
         "timestamp": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
     }
 
@@ -92,7 +94,10 @@ def main() -> None:
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--limit", type=int, default=240, help="episodes to identify, in builder order (cache is skipped)")
     p.add_argument("--workers", type=int, default=16)
+    p.add_argument("--claude-account", "--claude_account", dest="claude_account", choices=["p", "w"], default=None,
+                   help="which Claude account claude -p bills: p (personal) or w (work); default: the environment's")
     args = p.parse_args()
+    set_claude_account(args.claude_account)
 
     cache = load_cache()
     todo = []

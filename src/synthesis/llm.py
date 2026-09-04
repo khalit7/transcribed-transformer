@@ -46,6 +46,25 @@ _RESET_TS = re.compile(r"limit reached\|(\d{9,11})")
 LIMIT_MAX_WAIT = 4 * 3600  # give up on one call after this much cumulative backoff
 
 
+# Which Claude account `claude -p` bills: Khalid's shell aliases select an account by CLAUDE_CONFIG_DIR
+# (p_claude / w_claude); `set_claude_account("p"|"w")` does the same for every call from this process.
+CLAUDE_ACCOUNTS = {"p": "~/.claude-personal-config", "w": "~/.claude-work-config"}
+_claude_env: dict[str, str] = {}
+CLAUDE_ACCOUNT: str | None = None
+
+
+def set_claude_account(account: str | None) -> None:
+    """Route claude -p calls to account "p" (personal) or "w" (work); None keeps the environment's default."""
+    global CLAUDE_ACCOUNT
+    _claude_env.clear()
+    CLAUDE_ACCOUNT = account
+    if account is None:
+        return
+    if account not in CLAUDE_ACCOUNTS:
+        raise LLMError(f"claude account must be one of {sorted(CLAUDE_ACCOUNTS)}, got {account!r}")
+    _claude_env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(CLAUDE_ACCOUNTS[account])
+
+
 class LLMError(RuntimeError):
     pass
 
@@ -76,7 +95,8 @@ def _raise_claude(msg: str) -> None:
 
 def _claude(prompt: str, name: str, timeout: int) -> tuple[dict, float]:
     proc = subprocess.run(["claude", "-p", "--model", name, "--output-format", "json"],  # noqa: PLW1510
-                          input=prompt, capture_output=True, text=True, timeout=timeout)
+                          input=prompt, capture_output=True, text=True, timeout=timeout,
+                          env={**os.environ, **_claude_env})
     if proc.returncode != 0:
         _raise_claude((proc.stderr + "\n" + proc.stdout).strip())
     envelope = json.loads(proc.stdout)
