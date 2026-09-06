@@ -95,11 +95,12 @@ def test_labeller_sees_verbatim_roles_and_roleless_corpora_raise(monkeypatch):
     p = prompt(lines, ["doctor", "patient", "patient_guest"], QUESTIONS[0])
     assert "1: doctor: Hello." in p and "3: patient_guest: Also here." in p
     assert "as recorded by the source (doctor, patient, patient_guest)" in p
-    from src.synthesis import identify_speakers as ids
+    from src.synthesis import cases
 
-    monkeypatch.setattr(ids, "load_cache", dict)  # no cached hosts, identification forbidden -> must raise
-    with pytest.raises(NoSpeakerRoles):
-        next(iter(BUILDERS["sporc"](identify_model="")))
+    monkeypatch.setattr(cases, "sporc_hosts", dict)  # no identified hosts -> no SPoRC case is ever built
+    monkeypatch.setattr(cases, "sporc_episodes", lambda max_lines=160: iter([("x", [("SPEAKER_00", "hi")], {})]))
+    assert next(iter(BUILDERS["sporc"]()), None) is None
+    assert NoSpeakerRoles  # still the error for a role-bearing corpus with an unattributed turn
 
 
 def test_claude_limit_is_waited_out_not_failed(monkeypatch):
