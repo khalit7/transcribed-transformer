@@ -41,9 +41,10 @@ def ollama_url(key: str | int | None = None) -> str:
     return OLLAMA_URLS[h % len(OLLAMA_URLS)]
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.DOTALL)
 # rate limit (429), usage-cap ("usage limit reached|<unix ts>"), overloaded (529) and similar transient refusals
-_LIMIT = re.compile(r"rate.?limit|usage limit|limit reached|too many requests|\b429\b|\b529\b|overloaded|capacity|try again later", re.IGNORECASE)
+_LIMIT = re.compile(r"rate.?limit|usage limit|session limit|limit reached|too many requests|\b429\b|\b529\b|overloaded|capacity|try again later", re.IGNORECASE)
 _RESET_TS = re.compile(r"limit reached\|(\d{9,11})")
-LIMIT_MAX_WAIT = 4 * 3600  # give up on one call after this much cumulative backoff
+_RESET_CLOCK = re.compile(r"resets? (?:at )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)", re.IGNORECASE)  # "resets 10:20pm (Europe/London)"
+LIMIT_MAX_WAIT = 6 * 3600  # give up on one call after this much cumulative backoff (session limits reset within 5 h)
 
 
 # Which Claude account `claude -p` bills: Khalid's shell aliases select an account by CLAUDE_CONFIG_DIR
@@ -86,10 +87,27 @@ def split_model(model: str) -> tuple[str, str]:
     return backend, name
 
 
+def _reset_after(msg: str) -> float | None:
+    """Seconds until the reset a limit message announces: a unix timestamp ("limit reached|<ts>") or a local
+    clock time ("resets 10:20pm"); None when the message gives neither."""
+    m = _RESET_TS.search(msg)
+    if m:
+        return max(0.0, int(m.group(1)) - time.time())
+    m = _RESET_CLOCK.search(msg)
+    if m:
+        hour, minute, ampm = int(m.group(1)) % 12, int(m.group(2) or 0), m.group(3).lower()
+        hour += 12 if ampm == "pm" else 0
+        now = time.localtime()
+        target = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, hour, minute, 0, 0, 0, -1))
+        if target < time.time():
+            target += 86400
+        return target - time.time()
+    return None
+
+
 def _raise_claude(msg: str) -> None:
     if _LIMIT.search(msg):
-        m = _RESET_TS.search(msg)
-        raise LLMLimit(msg[-300:], max(0.0, int(m.group(1)) - time.time()) if m else None)
+        raise LLMLimit(msg[-300:], _reset_after(msg))
     raise LLMError(msg[-500:])
 
 
@@ -148,7 +166,7 @@ def ask_json(prompt: str, model: str, schema: dict | None = None, retries: int =
                 pause = e.retry_after + 15
             else:
                 pause, delay = delay, min(delay * 2, 600)
-            pause = min(pause, LIMIT_MAX_WAIT - waited) * (1 + 0.2 * random.random())  # jitter spreads the workers
+            pause = min(pause, LIMIT_MAX_WAIT - waited) + min(60.0, 0.2 * pause) * random.random()  # jitter spreads the workers
             print(f"  [{model}] limit hit, waiting {pause / 60:.1f} min: {str(e)[:120]}", file=sys.stderr, flush=True)
             time.sleep(pause)
             waited += pause

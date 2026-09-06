@@ -8,8 +8,9 @@ reads the ads, closes). Only the host is identified; the other speakers keep the
 diarisation tags, which keeps them distinguishable without claiming a role for them.
 
 Results are cached in data/labelled_data/speakers/sporc.jsonl (one line per episode:
-doc_id, host, confidence, reason, model, cost_usd, timestamp) and reused by
-cases.sporc_cases, which identifies on demand for any episode not yet cached.
+doc_id, host, confidence, reason, model, cost_usd, timestamp). This is the ONLY place
+identification happens: cases.sporc_cases builds identified episodes and skips the rest,
+and synth_data refuses a job that needs more SPoRC episodes than are identified.
 
     uv run python -m src.synthesis.identify_speakers --limit 240            # pre-identify, in builder order
     uv run python -m src.synthesis.identify_speakers --limit 240 --workers 16

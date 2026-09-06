@@ -46,7 +46,7 @@ import random
 import time
 from pathlib import Path
 
-from src.synthesis.cases import BUILDERS
+from src.synthesis.cases import BUILDERS, sporc_hosts
 from src.synthesis.label import ablate, dumps, label, verify
 from src.synthesis.llm import (
     OLLAMA_URLS,
@@ -122,7 +122,24 @@ def main() -> None:
         args.workers = DEFAULT_WORKERS if split_model(args.model)[0] == "claude" else len(OLLAMA_URLS)
 
     rng = random.Random(args.seed)
-    pool = load_pool(args.sources.split(","), args.pool_per_source)
+    sources = args.sources.split(",")
+    pool = load_pool(sources, args.pool_per_source)
+    # Refuse up front when the job needs more transcripts than are available. Selection is round-robin over
+    # datasets, so a run of N draws ceil(N / len(sources)) from each; a shortfall in any dataset (e.g. more
+    # SPoRC episodes than have had their host identified) is an error, never a silent re-balancing.
+    need = -(-args.generation_size // len(sources))
+    have = collections.Counter(c.dataset for c in pool)
+    short = {s: have.get(s, 0) for s in sources if have.get(s, 0) < need}
+    if short:
+        detail = []
+        for s, n in short.items():
+            extra = ""
+            if s == "sporc":
+                hosts = sporc_hosts()
+                extra = (f"; {len(hosts)} episodes identified, {sum(1 for h in hosts.values() if h['host'])} with a host: "
+                         f"run `python -m src.synthesis.identify_speakers --limit <n>` first")
+            detail.append(f"{s}: {n} available in the pool (--pool-per-source {args.pool_per_source}){extra}")
+        p.error(f"asked for {args.generation_size} transcripts, i.e. {need} per dataset, but: " + "; ".join(detail))
     done_pairs = existing_pairs(out)
     counts: collections.Counter = collections.Counter()
     total_cost = 0.0
@@ -132,11 +149,17 @@ def main() -> None:
 
     # choose the transcripts first (seeded, without replacement, round-robin over datasets so a run of N draws
     # ~N/len(sources) calls from each), then every applicable unlabelled question of each
-    by_ds: dict[str, list[Case]] = {}
+    # Every dataset's pool is shuffled in the canonical BUILDERS order from one seeded generator, whatever
+    # --sources says, so the calls selected from a dataset depend only on seed, pool size and N per dataset:
+    # a run over a subset of the datasets picks exactly the calls a full run would pick from them.
+    by_ds: dict[str, list[Case]] = {ds: [] for ds in BUILDERS}
     for c in pool:
-        by_ds.setdefault(c.dataset, []).append(c)
-    for cs in by_ds.values():
+        by_ds[c.dataset].append(c)
+    for ds in BUILDERS:
+        cs = by_ds[ds] if ds in sources else load_pool([ds], args.pool_per_source)
         rng.shuffle(cs)
+        by_ds[ds] = cs if ds in sources else []
+    by_ds = {ds: cs for ds, cs in by_ds.items() if cs}
     order = [ds for ds in by_ds]
     pool = [c for i in range(max(len(cs) for cs in by_ds.values())) for ds in order if i < len(by_ds[ds]) for c in [by_ds[ds][i]]]
     jobs: list[tuple[Case, Question]] = []

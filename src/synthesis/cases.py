@@ -18,8 +18,8 @@ it (Khalid, 2026-09-03: always the verbatim roles, never a remapping). AppTek:
 `agent` / `customer`; Taskmaster: `assistant` / `user`; ACI-Bench: `doctor` /
 `patient` (plus whatever other bracketed speaker the dialogue names). SPoRC has
 diarised `SPEAKER_NN` tags only, so its HOST is identified by an LLM first
-(identify_speakers.py, cached) and rendered as `host`; other speakers keep their
-tags. A corpus with no role labels and no identification raises NoSpeakerRoles.
+(identify_speakers.py, an explicit, paid step, cached) and rendered as `host`;
+other speakers keep their tags, and only identified episodes are ever built.
 """
 
 import csv
@@ -205,32 +205,25 @@ def sporc_episodes(max_lines: int = 160) -> Iterator[tuple[str, list[tuple[str, 
                                                         "category": d["meta"].get("category", "")}
 
 
-def sporc_cases(max_lines: int = 160, identify_model: str | None = None, only: set[str] | None = None) -> Iterator[Case]:
-    """SPoRC ships diarised `SPEAKER_NN` labels and no roles, so the host is identified first
-    (identify_speakers.py, cached on disk; identified on demand here for any uncached episode
-    with `identify_model`, default claude:sonnet; pass "" to forbid identification, in which case an
-    uncached episode raises NoSpeakerRoles). The host's lines render as `host:`; the other speakers
-    keep their diarisation tags. Episodes whose host could not be identified are skipped with a
-    notice, never rendered role-less. `only` restricts to a set of case ids (sporc-<doc_id>) so a
-    sampler can pick episodes by position in the raw stream and pay for identification only on
-    those it uses."""
+def sporc_hosts() -> dict[str, dict]:
+    """Cached host identifications (identify_speakers.py), doc_id -> record; only these episodes can be built."""
     from src.synthesis import identify_speakers as ids
+    return ids.load_cache()
 
-    cache = ids.load_cache()
-    model = ids.DEFAULT_MODEL if identify_model is None else identify_model
+
+def sporc_cases(max_lines: int = 160, only: set[str] | None = None) -> Iterator[Case]:
+    """SPoRC ships diarised `SPEAKER_NN` labels and no roles, so only episodes whose host has already been
+    identified (identify_speakers.py, cached on disk) are built; the host's lines render as `host:`, the
+    other speakers keep their diarisation tags. Episodes not in the cache, or whose host could not be
+    identified, are skipped: nothing is identified on demand, so a run never spends on identification
+    (synth_data refuses up front when a job needs more episodes than are identified). `only` restricts
+    to a set of case ids (sporc-<doc_id>)."""
+    cache = sporc_hosts()
     for doc_id, turns, meta in sporc_episodes(max_lines):
         if only is not None and f"sporc-{doc_id}" not in only:
             continue
         rec = cache.get(doc_id)
-        if rec is None:
-            if not model:
-                raise NoSpeakerRoles(f"sporc {doc_id}: no speaker roles and host identification is disabled")
-            rec = ids.identify(doc_id, turns, model)
-            ids.append(rec)
-            cache[doc_id] = rec
-            print(f"  sporc {doc_id}: host identified on demand by {model} (${rec['cost_usd']:.2f}) -> {rec['host']}", flush=True)
-        if rec["host"] is None:
-            print(f"  sporc {doc_id}: no host identified ({rec['reason'][:80]}); skipped", flush=True)
+        if rec is None or rec["host"] is None:
             continue
         host = rec["host"]
         lines = [f"{'host' if t == host else t}: {x}" for t, x in turns]

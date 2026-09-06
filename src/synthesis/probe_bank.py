@@ -18,13 +18,16 @@ import json
 import random
 
 from src.synthesis.cases import BUILDERS, ID_STREAMS
-from src.synthesis.llm import ask_json, set_claude_account
+from src.synthesis.llm import (
+    OLLAMA_URLS,
+    ask_json,
+    set_claude_account,
+    set_ollama_urls,
+    split_model,
+)
+from src.synthesis.ollama_servers import ensure_servers
 from src.synthesis.question_bank import QUESTIONS
 from src.synthesis.schema import Case
-
-
-def ask(model: str, prompt: str) -> tuple[dict, float]:
-    return ask_json(prompt, model)
 
 
 def main() -> None:
@@ -67,13 +70,19 @@ def main() -> None:
             pool = list(itertools.islice(BUILDERS[src](), int(n) * 6))
             calls += rng.sample(pool, min(int(n), len(pool)))
 
+    if split_model(args.model)[0] == "ollama":
+        set_ollama_urls(ensure_servers())  # one server per GPU, started on demand; calls routed by index
+        if args.workers == 1:
+            args.workers = len(OLLAMA_URLS)
+    index = {c.id: i for i, c in enumerate(calls)}
+
     def probe(case: Case) -> tuple[dict, float]:
         lines = "\n".join(f"{n + 1}: {ln}" for n, ln in enumerate(case.transcript.lines("clean")))
         roles = ", ".join(case.transcript.speakers)
         prompt = (f"Transcript, one turn per line, each prefixed by the speaker's role as recorded by the source ({roles}).\n\nTRANSCRIPT\n{lines}\n\n"
                   f"Answer EVERY question below strictly by its option criteria, for this call as it stands.\n\n{qtext}\n\n"
                   'Respond with one JSON object mapping each question id to its answer value, e.g. {"gen-01-greeting": "pass", ...}. Nothing else.')
-        return ask(args.model, prompt)
+        return ask_json(prompt, args.model, route=index[case.id])
 
     dist: dict[str, collections.Counter] = {q.id: collections.Counter() for q in qs}
     total_cost = 0.0
