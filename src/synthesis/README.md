@@ -23,6 +23,38 @@ uv run python -m src.synthesis.export --track p                                 
 
 The size argument counts **transcripts**, not labels: with the current bank a call yields 110 labels on AppTek, 68 on Taskmaster, 61 on ACI-Bench and 53 on SPoRC. The model argument names the backend: `claude:<model>` runs `claude -p` (cost tracked from the CLI, ~$0.06–0.10 a label with Sonnet); `ollama:<model>` runs a local model (cost 0; `qwen3:32b`, `llama3.3:70b`, `gemma3:27b`, `deepseek-r1:70b` are pulled). Prompts put the transcript first and the question last so a caching server can reuse the prefix across questions on the same call. Labeller calls run concurrently: `--workers` defaults to 16 for `claude:` (independent API calls). For `ollama:` **every GPU is used automatically**: `synth_data` starts (or reuses) one Ollama server pinned to each GPU (`ollama_servers.py`; user processes, logs and pids under `/tmp/ollama-pinned`, left running and idle afterwards), runs one worker per server, and sends consecutive calls to alternate servers so each call's questions stay on one server and its transcript prefix stays cached. Measured 2026-09-04 with qwen3.8 on general_qa: 47 labels/min on one GPU, **83 on two**. Parallel slots on one server were tried and removed: Ollama 0.32 serves Qwen3.5 one request at a time. Set `OLLAMA_URLS` to use specific servers instead. Records are appended as they complete, so file order is not label order; ids are what matter. A Claude rate or usage limit does not fail the run: the worker that hits it sleeps until the reset the CLI reports (or backs off 30 s → 10 min, for up to 4 h), prints one line per wait, and resumes; only malformed output is retried immediately and then counted as a failure. A killed or failed run is resumed by re-running the same command: existing ids are skipped. `labelled_data.jsonl` is the ledger of what has been labelled: ids are `<call>::<question>`, call ids derive from the source files, and a call's rendering is a pure function of the source (verbatim roles, no run-dependent choices), so the same call always appears identically no matter which run produced each of its labels.
 
+## Train, val and benchmark
+
+The ledger serves both training and benchmarking; `split.py` decides which record goes where, and `benchmark.py` builds the three files. Rules (2026-09-08):
+
+- **Split by transcript, never by (transcript, question) pair.** A call in both train and benchmark leaks the whole conversation. SPoRC groups by podcast: every episode of one podcast lands on the same side (31 podcasts contribute more than one episode).
+- **Only fully labelled calls can be benchmark or val**: every question allowed for the call's dataset has a label. Calls that lost a pair to a labeller failure, and the Taskmaster/SPoRC calls with family labels only, go to train.
+- **Benchmark calls are the best of 3,000 seeded draws plus 20,000 swap refinements**, scored on proportional coverage of the dataset's strata (AppTek domain and locale; SPoRC category; ACI-Bench source split), a floor of 30 rare-event positive calls per family (answer `fail` on a family question) where the pool allows, and, for SPoRC, at least 15 of the 60 episodes above the pool's p90 length (Qwen3 tokens of the rendered transcript).
+- **About 20% of the general_qa question lineages are held out of training per dataset** (a lineage is a question plus its Taskmaster word-substituted `tm-` variant, which is the same question). Pairs with a held-out question are dropped from train and val; on benchmark calls they form the **unseen-question cell**, the one the zero-shot claim rests on. The vulnerability, complaint and eod questions are never held out (Khalid's decision: they stay in training).
+- **Val** is a small in-distribution slice of the remaining fully labelled calls, same question set as train, for early stopping and model selection only. It is never reported.
+- **Benchmark labels are reconciled, train labels are not.** Every benchmark general_qa pair gets a second, independent local label (`relabel.py ollama:gemma4:12b`); where it agrees with the ledger's qwen3.8 answer the label stands with the union of both evidence keys, where it disagrees Opus labels the pair and its label is the gold label (`relabel.py claude:opus --disagree-with`). The family labels (Sonnet) get an Opus re-label on every rare-event positive. Opus, not Sonnet, adjudicates because Sonnet is the API baseline and must not be graded against labels it wrote. Every benchmark record carries every labeller's answer (`provenance.labels`) and how the gold label was settled (`single | agreement | adjudicated`). The ground truth is model-generated and the benchmark write-up says so.
+
+Frozen assignment (`splits.json`, seed 0, 2026-09-08), calls per dataset:
+
+| Dataset | Fully labelled | Benchmark | Val | Train | Excluded |
+|---|---|---|---|---|---|
+| AppTek | 870 | 100 | 40 | 733 | 0 |
+| ACI-Bench | 206 | 40 | 10 | 156 | 0 |
+| Taskmaster | 206 | 60 | 15 | 1,145 | 0 |
+| SPoRC | 201 | 60 | 16 | 1,130 | 3 |
+
+Excluded = partially labelled sibling episodes of a benchmark podcast (neither side). Held out: 41 general_qa lineages, 51 question ids (AppTek 20 of 100 general_qa questions, Taskmaster 13 of 64, ACI-Bench 12 of 58, SPoRC 10 of 52). Pairs: benchmark 20,700 (seen-question cell 16,840, unseen 3,860), val 5,561, train 91,502, dropped 20,808 (held-out questions on train/val calls). Benchmark positives: AppTek complaint 40 / eod 33 / vulnerability 31 calls, ACI-Bench 6 / 5, Taskmaster eod 5 / vulnerability 12 (complaint has 2 positives in the whole corpus and is not measurable there), SPoRC vulnerability 23. SPoRC benchmark median 6,786 tokens, max 15,018 (cases are capped at 160 turns), 15 above the pool's p90 of 10,595.
+
+```
+uv run python -m src.synthesis.split                      # once; refuses to overwrite (--force rebuilds = a new benchmark)
+uv run python -m src.synthesis.relabel ollama:gemma4:12b --families general_qa --out data/labelled_data/benchmark/second_gemma4-12b.jsonl
+uv run python -m src.synthesis.relabel claude:opus --families general_qa --disagree-with data/labelled_data/benchmark/second_gemma4-12b.jsonl --out data/labelled_data/benchmark/adjudicate_opus_general.jsonl --claude-account p
+uv run python -m src.synthesis.relabel claude:opus --families vulnerability,complaint,eod --answers fail --out data/labelled_data/benchmark/adjudicate_opus_families.jsonl --claude-account p
+uv run python -m src.synthesis.benchmark                  # train.jsonl, val.jsonl, benchmark.jsonl, benchmark_summary.json
+```
+
+Anything labelled after the freeze joins train (`split.assign` sends unknown calls there). Multi-call cases, when they are composed, must be composed from one side only, and `splits.json` is the single file both composers read. Reconciliation results (2026-09-09). Second pass, gemma4:12b on the 19,280 benchmark general_qa pairs: 19,276 labels, 4 loop failures, 3.0 h on two GPUs (107 labels/min); agreed with qwen3.8 on **15,462 (80.2%)**: AppTek 79.2%, Taskmaster 82.0%, ACI-Bench 79.6%, SPoRC 81.5%; seen-question cell 80.0% vs unseen 81.1%. Disagreements have no dominant shape (fail/pass, NA/fail and pass/fail each about 645 pairs). Evidence keys of agreeing labellers overlap at Jaccard 0.55, hence the union rule. Opus adjudicated the 3,818 disagreements and missing pairs ($587.02, $0.154 per label): it sided with qwen3.8 on 2,155 (56%), with gemma4 on 1,284 (34%) and with neither on 379 (10%). Opus also re-labelled the 194 family positives ($32.13): it agreed with Sonnet's `fail` on 126 (65%). Net effect: 1,663 general_qa gold answers (8.6%) and 68 family gold answers differ from the ledger. Gold positives per family after adjudication (calls; Sonnet's count in brackets): AppTek complaint 30 (40), dissatisfaction 26 (33), vulnerability 18 (31); SPoRC vulnerability 21 (23); ACI-Bench 3 (6) and 3 (5); Taskmaster dissatisfaction 2 (5), vulnerability 3 (12). Gold labels with no evidence: 2,045 NA, 669 pass, 193 fail. **Policy (2026-09-09): empty means empty.** An absence answer carries no evidence; an empty gold key is scored literally (the model must emit `[]`, any cited line is a false positive), training records are used as labelled, nothing is re-labelled or filled with near-miss lines. Labellers were not told this, so some absence answers do cite near-miss lines; that inconsistency is a known limitation of the gold, not corrected. Opus total for the benchmark: $619.15.
+
 ## What a label is, and the checks around it
 
 The labeller is asked for **evidence first, then the answer, then the summary**, plus its own 0–1 **confidence** and, for questions that define one, **tags** from a closed vocabulary (the vulnerability question tags the FCA FG21/1 characteristic(s) present). Evidence-first ordering is what improved citation quality in the literature; confidence is what routes items to human audit later.
@@ -36,7 +68,7 @@ Two optional checks, each stored on the record:
 
 | Module | Role |
 |---|---|
-| `schema.py` | `Question`, `Transcript`/`Variant`, `Case`, `Label`, `Verification`, `Ablation`, `Generation`, `LabelledRecord` — pydantic, validated |
+| `schema.py` | `Question`, `Transcript`/`Variant`, `Case`, `Label`, `Verification`, `Ablation`, `Generation`, `LabelledRecord`, `Provenance`, `BenchmarkRecord` — pydantic, validated |
 | `question_bank.py` | the bank (source of truth); `write_questions()` derives `questions.jsonl` |
 | `cases.py` | builds calls from what is on disk, each as line-aligned `clean`/`messy` variants whose lines carry the corpus's own speaker role labels verbatim; raises `NoSpeakerRoles` for a corpus without them |
 | `label.py` | the labelling prompt, the JSON schema (enforced server-side on Ollama), `label()`, `verify()` (second labeller, blind), `ablate()` (re-labelling with evidence removed / kept) |
@@ -47,6 +79,9 @@ Two optional checks, each stored on the record:
 | `audit_bank.py` | reconciles probe files from several labellers per dataset: flags each (question, dataset) cell NA-dominant or skewed by labeller majority, and diffs the proposal against the bank's allow lists |
 | `grade_labels.py` | **LLM-as-a-judge**: for a stratified sample of pairs labelled by several labellers, the judge (Opus) answers the question itself, then grades every label's answer, evidence, summary and tags, labels anonymised and shuffled per pair; one call per pair, ~$0.25–0.30 with Opus |
 | `analyse_labellers.py` | per-labeller report from the judgements (answer accuracy, rare-event recall, NA↔fail confusion, evidence and summary grades, tag grades, cost and speed); blind human-review export/import and judge-vs-human agreement |
+| `split.py` | freezes the call assignment (train / val / benchmark, grouped by podcast for SPoRC) and the held-out question lineages into `splits.json`; `assign()` is the one place the rule lives |
+| `relabel.py` | labels the benchmark pairs again with another labeller: a second opinion (`ollama:gemma4:12b`) or an adjudication of the disagreements and the rare-event positives (`claude:opus`); one file per labeller under `benchmark/` |
+| `benchmark.py` | writes `train.jsonl`, `val.jsonl` and `benchmark.jsonl` (gold label reconciled from the labellers, provenance and seen/unseen-question cell on every record) plus `benchmark_summary.json` |
 | `export.py` | track-filtered release copy |
 
 ## Data format
@@ -114,3 +149,4 @@ To add a question: a `q(...)` entry in `question_bank.py` in the vocabulary of i
 - Rare-event questions (complaint, dissatisfaction, vulnerability on service calls) fire on roughly 1 call in 10 to 1 in 40 of the public corpora; none of the on-disk data is complaint-heavy.
 - Evidence is precision-only; `ablation` says how far a key can be trusted, it does not complete it.
 - Single-call cases; multi-call cases with any/all semantics are future work.
+- Benchmark ground truth is model-generated (two local labellers plus Opus adjudication for general_qa; Sonnet plus an Opus re-label of the positives for the families). Agreement between labellers is not correctness; the labeller-selection study's judge-vs-unanimous-labellers figure (196/204) is the only calibration of that.

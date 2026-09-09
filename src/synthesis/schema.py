@@ -159,3 +159,16 @@ class LabelledRecord(BaseModel):
     verification: Verification | None = None
     ablation: Ablation | None = None
     meta: dict = {}
+
+
+class Provenance(BaseModel):
+    """How a benchmark record's gold label was settled (benchmark.py)."""
+    method: Literal["single", "agreement", "adjudicated", "pending"]
+    labels: dict[str, Answer]  # every labeller's answer, keyed by labeller name
+    adjudicator: str | None = None  # the labeller whose label is the gold label when adjudicated
+
+
+class BenchmarkRecord(LabelledRecord):
+    """A LabelledRecord whose `label` is the reconciled gold label; `generation_info` is the ledger's."""
+    cell: Literal["seen_q", "unseen_q"]  # was the question in the training question set?
+    provenance: Provenance

@@ -142,3 +142,57 @@ def test_claude_other_errors_still_fail_fast(monkeypatch):
     monkeypatch.setattr(llm.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("should not sleep")))
     with pytest.raises(LLMError, match="boom"):
         llm.ask_json("p", "claude:sonnet", retries=1)
+
+
+# --- split and benchmark reconciliation -------------------------------------------------------
+
+def test_lineage_maps_taskmaster_variants_to_their_base_question():
+    from src.synthesis.split import lineage
+    assert lineage("tm-16-read-back") == "gen-16-read-back"
+    assert lineage("tm-vul-01-present") == "vul-01-present"
+    assert lineage("tm-101-own") == "tm-101-own"  # hand-written Taskmaster question: its own lineage
+    assert lineage("spk-01-speakers-introduced") == "spk-01-speakers-introduced"
+
+
+def test_held_out_lineages_never_include_families_and_hit_the_target_share():
+    import random
+
+    from src.synthesis.split import HELD_OUT_FRACTION, held_out_lineages, lineage
+    held = held_out_lineages(random.Random(0))
+    by_id = {q.id: q for q in QUESTIONS}
+    assert all(by_id[l].family == "general_qa" for l in held)
+    for ds in ("apptek", "taskmaster", "aci_bench", "sporc"):
+        allowed = {lineage(q.id) for q in QUESTIONS if q.family == "general_qa" and ds in q.dataset_allow_list}
+        share = len(allowed & set(held)) / len(allowed)
+        assert HELD_OUT_FRACTION - 0.03 <= share <= HELD_OUT_FRACTION + 0.08, (ds, share)
+
+
+def test_assign_drops_held_out_questions_off_benchmark_only():
+    from src.synthesis.split import assign
+    splits = {"calls": {"c-bench": "benchmark", "c-val": "val", "c-x": "excluded"}, "held_out_questions": ["gen-9"]}
+    rec = lambda cid, qid: {"id": f"{cid}::{qid}", "question": {"id": qid}}
+    assert assign(rec("c-bench", "gen-9"), splits) == "benchmark"
+    assert assign(rec("c-val", "gen-9"), splits) == "drop"
+    assert assign(rec("c-val", "gen-1"), splits) == "val"
+    assert assign(rec("c-new", "gen-1"), splits) == "train"  # labelled after the freeze
+    assert assign(rec("c-new", "gen-9"), splits) == "drop"
+    assert assign(rec("c-x", "gen-1"), splits) == "drop"
+
+
+def test_reconcile_agreement_unions_evidence_and_disagreement_needs_the_adjudicator():
+    from src.synthesis.benchmark import reconcile
+    ledger = {"label": {"answer": "pass", "evidence": [1, 2], "summary": "s"}, "generation_info": {"name": "ollama:qwen3.8"}}
+    agree = {"label": {"answer": "pass", "evidence": [2, 3]}, "generation_info": {"name": "ollama:gemma4:12b"}}
+    differ = {"label": {"answer": "fail", "evidence": [3]}, "generation_info": {"name": "ollama:gemma4:12b"}}
+    opus = {"label": {"answer": "fail", "evidence": [3], "summary": "o"}, "generation_info": {"name": "claude:opus"}}
+    gold, prov = reconcile(ledger, agree, None)
+    assert (prov.method, gold.answer, gold.evidence) == ("agreement", "pass", [1, 2, 3])
+    gold, prov = reconcile(ledger, differ, None)
+    assert prov.method == "pending" and gold.answer == "pass"
+    gold, prov = reconcile(ledger, differ, opus)
+    assert (prov.method, gold.answer, prov.adjudicator) == ("adjudicated", "fail", "claude:opus")
+    assert prov.labels == {"ollama:qwen3.8": "pass", "ollama:gemma4:12b": "fail", "claude:opus": "fail"}
+    gold, prov = reconcile(ledger, None, None)
+    assert prov.method == "single"
+    gold, prov = reconcile(ledger, None, opus)  # spot-checked family label with no second opinion
+    assert prov.method == "adjudicated" and gold.answer == "fail"
