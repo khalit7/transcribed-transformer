@@ -21,7 +21,7 @@ One directory per run, `experiments/<date>-<short-slug>/`, containing a `README.
 
 - **Hypothesis** — what is believed, and why it might be true
 - **Prediction** — the specific measurable outcome expected, and what result would disconfirm it
-- **Setup** — arm, base checkpoint, licence track, dataset build, key hyperparameters. Point at the wandb run for the full config rather than duplicating it.
+- **Setup** — experiment (E0 to E5), base checkpoint, licence track, dataset build, key hyperparameters. Point at the wandb run for the full config rather than duplicating it.
 - **wandb run** — project and run id, as a link
 - **Result** — what actually happened, with numbers read from wandb, not recalled
 - **Verdict** — confirmed, disconfirmed, or inconclusive, and what changes as a result

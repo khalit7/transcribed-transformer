@@ -45,4 +45,4 @@ Report the discriminator result honestly, including when it fails. A channel mod
 
 - Deterministic given a seed. Same input plus same seed plus same channel version produces byte-identical output.
 - Configured by YAML like everything else; the code does not change to add a new channel variant.
-- Log fitting runs to the `tt-trunk` wandb project with the corpus and ASR system as tags.
+- Log fitting runs to the `tt-pretrain` wandb project with the corpus and ASR system as tags.

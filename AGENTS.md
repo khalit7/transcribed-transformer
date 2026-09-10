@@ -4,7 +4,7 @@ Working agreement for this repository. Read this before making changes.
 
 ## What this project is
 
-Research towards models that answer compliance questions over collections of ASR call transcripts, comparing three experiments: a fine-tuned **decoder**, an **encoder-decoder** (bidirectional attention over the transcript), and a prompted **API model** baseline.
+Research towards models that answer compliance questions over collections of ASR call transcripts, comparing a prompted **API model** baseline with trained arms built from one model family: a causal **decoder**, a **prefix-LM** decoder (bidirectional attention over the transcript), an **encoder-decoder**, and two frozen-encoder designs (the table in `README.md`, "Design").
 
 The task shape: input is a case (one or more diarised ASR transcripts of calls between staff and customers, speaker-labelled turns with no role labels, one turn per line, up to tens of thousands of tokens each). Input also includes a compliance question and explicit definitions of what constitutes each of its possible answers. Output is a triple:
 
@@ -88,9 +88,9 @@ Sources are immutable under `data/raw/<dataset>/`, one folder per dataset. Deriv
 
 Every training and evaluation run logs to Weights & Biases. There is no second logging path.
 
-- **Projects by experiment**: `tt-decoder`, `tt-encdec`, `tt-baselines`.
+- **Projects**: `tt-baselines` (E0), `tt-decoder` (E1, E2), `tt-encdec` (E3, E4, E5), `tt-pretrain` (continued pretraining, adaptation stages, channel-model fitting).
 - **Log the fully resolved config** as the run config, not a path to a YAML. A run must be reproducible from wandb alone.
-- **Mandatory tags on every run**: licence track (`track-p` / `track-nc`), experiment (`decoder` / `encdec` / `api`), and base checkpoint. Results tables are generated from the wandb API filtered on these tags, which is what stops written numbers drifting from real ones.
+- **Mandatory tags on every run**: licence track (`track-p` / `track-nc`), experiment (`e0` to `e5`), base checkpoint and size. Results tables are generated from the wandb API filtered on these tags, which is what stops written numbers drifting from real ones.
 - **Always logged**: loss, learning rate, grad norm, tokens seen, throughput (tokens/s and MFU), per-GPU memory.
 - **Evaluation logs to the same run id** as the training job that produced the checkpoint. A checkpoint's quality and its training curve are never separated.
 - **Artefacts** (tokenizer, ASR channel-model parameters, benchmark version) versioned as wandb artifacts, so any result traces back to the exact data that produced it.
