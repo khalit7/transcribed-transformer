@@ -1,0 +1,26 @@
+# Adaptation stage for E1+: causal next-token prediction on the training transcripts (no labels),
+# the causal arm's own objective, matched in text and steps to configs/adapt/mntp-qwen3-1.7b-base.yaml.
+experiment: e1
+name: adapt-causal-qwen3-1.7b-base
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 32768
+model:
+  base: Qwen/Qwen3-1.7B-Base
+  attn: flash_attention_2
+  gradient_checkpointing: true
+adapt:
+  objective: causal
+optim:
+  lr: 1.0e-5
+  warmup_steps: 20
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 2            # 3,164 transcripts, 32 per step: ~198 steps, ~20M tokens (LLM2Vec's MNTP budget was 16M)
+batch_sequences: 32
+micro_tokens: 16384       # every token is a target here, so activations and the chunked logits cost more than in fine-tuning
+val_every: 50
+checkpoint_minutes: 30
+wandb_project: tt-pretrain
+tags: [adapt]

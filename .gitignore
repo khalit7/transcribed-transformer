@@ -55,3 +55,6 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# vLLM evaluation environment
+/.venv-vllm/

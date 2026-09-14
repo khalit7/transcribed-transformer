@@ -43,10 +43,10 @@ If a change would require internal knowledge to justify, it does not belong here
 
 Every corpus is assigned to exactly one track, recorded in `data/DATASHEET.md`:
 
-- **Track P (permissive)** — licences allowing commercial use and derivative redistribution. Models trained on Track P only are portable to commercial settings. Share-alike licences (CC BY-SA, CDLA-Sharing) qualify for Track P but carry an **SA flag** in the datasheet: anything released that derives from SA-flagged data must carry the share-alike licence forward, and model cards must say so.
-- **Track NC (non-commercial)** — CC BY-NC, research-only, or unclear. Best data, but any model touching it is research-only.
+- **Track P (permissive)** — licences allowing commercial use and derivative redistribution. Share-alike licences (CC BY-SA, CDLA-Sharing) qualify for Track P but carry an **SA flag** in the datasheet: anything released that derives from SA-flagged data must carry the share-alike licence forward, and the release must say so.
+- **Track NC (non-commercial)** — CC BY-NC, research-only, or unclear. Best data; nothing derived from it is released.
 
-**Never mix tracks in a single training run.** Every headline result is reported on both tracks so the cost of the licence restriction is visible. Adding a corpus without a licence decision is not allowed; use the `add-corpus` skill, which enforces this.
+**The tracks govern what leaves this repository, not what a model may see.** The labelled data is released track-filtered (`python -m src.synthesis.export --track p`), and every labeller output that could be published carries its record's track. Training and evaluation are research-only and use every record regardless of track; a training run is never restricted by track. Results are reported once, with the per-corpus slices visible so the contribution of each source can be read off. Adding a corpus without a licence decision is not allowed; use the `add-corpus` skill, which enforces this.
 
 ### Data preference hierarchy
 
@@ -90,7 +90,7 @@ Every training and evaluation run logs to Weights & Biases. There is no second l
 
 - **Projects**: `tt-baselines` (E0), `tt-decoder` (E1, E2), `tt-encdec` (E3, E4, E5), `tt-pretrain` (continued pretraining, adaptation stages, channel-model fitting).
 - **Log the fully resolved config** as the run config, not a path to a YAML. A run must be reproducible from wandb alone.
-- **Mandatory tags on every run**: licence track (`track-p` / `track-nc`), experiment (`e0` to `e5`), base checkpoint and size. Results tables are generated from the wandb API filtered on these tags, which is what stops written numbers drifting from real ones.
+- **Mandatory tags on every run**: experiment (`e0` to `e5`), base checkpoint and size. Results tables are generated from the wandb API filtered on these tags, which is what stops written numbers drifting from real ones.
 - **Always logged**: loss, learning rate, grad norm, tokens seen, throughput (tokens/s and MFU), per-GPU memory.
 - **Evaluation logs to the same run id** as the training job that produced the checkpoint. A checkpoint's quality and its training curve are never separated.
 - **Artefacts** (tokenizer, ASR channel-model parameters, benchmark version) versioned as wandb artifacts, so any result traces back to the exact data that produced it.

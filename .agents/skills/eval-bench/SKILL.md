@@ -1,6 +1,6 @@
 ---
 name: eval-bench
-description: Run the compliance-QA benchmark and produce the results table. Use when evaluating any checkpoint or baseline, comparing arms, or regenerating the results table in the README. Covers the metric definitions, the two-track reporting rule and the label-provenance rules.
+description: Run the compliance-QA benchmark and produce the results table. Use when evaluating any checkpoint or baseline, comparing arms, or regenerating the results table in the README. Covers the metric definitions, the reporting slices and the label-provenance rules.
 ---
 
 # Running the benchmark
@@ -43,11 +43,11 @@ Every headline table is sliced three ways, because each slice answers a differen
 
 **By length bucket.** Cases binned by rendered token length, with accuracy *and* cost per bucket. Real transcript collections vary enormously in length; a single aggregate over a benchmark where every case is maximal misrepresents both quality and cost, and the long tail dominates the cost side.
 
-**By licence track.** See below.
+**By corpus.** Each source is a slice of its own, so the contribution of every corpus, and of the non-commercial ones in particular, can be read off.
 
 ## Reporting rules
 
-**Both licence tracks, always.** Every headline result appears twice: Track P (permissive, commercially portable) and Track NC (research-only, better data). Reporting only the better number hides the cost of the licence restriction, which is one of the project's actual findings.
+**Training and evaluation are research-only and use every record regardless of licence track** (CLAUDE.md, "Dataset licences"). Results are reported once; the per-corpus slices make the non-commercial sources' share visible. What the tracks restrict is the release of labelled data, never what a model is trained or scored on.
 
 **Gold slice is the headline, and gold is immutable.** Silver labels come from LLM consensus and are dev signal only. Beating a frontier model on labels that a frontier model produced is partly circular, and the human-annotated gold slice is the number that answers the question honestly. State inter-annotator agreement alongside it.
 

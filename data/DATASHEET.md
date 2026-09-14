@@ -16,10 +16,10 @@ Keep this file current when a dataset is added, removed, or re-scoped.
 
 | Track | Criteria | Consequence |
 |---|---|---|
-| **P** — permissive | Commercial use allowed **and** derivatives redistributable | Models trained on Track P only are commercially portable |
-| **NC** — non-commercial | CC BY-NC, research-only, or unclear | Any model touching this data is research-only |
+| **P** — permissive | Commercial use allowed **and** derivatives redistributable | Derived data (the labelled-data export) may be released |
+| **NC** — non-commercial | CC BY-NC, research-only, or unclear | Nothing derived from it is released; training and evaluation still use it, being research-only |
 
-Ambiguity resolves to **NC**. Share-alike licences (CC BY-SA, CDLA-Sharing) qualify for Track P but carry an **SA flag**: released derivatives must carry the licence forward, and model cards must say so. Tracks are never mixed within a training run. Every headline result is reported on both tracks.
+Ambiguity resolves to **NC**. Share-alike licences (CC BY-SA, CDLA-Sharing) qualify for Track P but carry an **SA flag**: released derivatives must carry the licence forward, and model cards must say so. The tracks govern what is released from the repository (the labelled-data export is track-filtered); training and evaluation are research-only and use every corpus, and results are reported once with per-corpus slices.
 
 ## Data tiers
 

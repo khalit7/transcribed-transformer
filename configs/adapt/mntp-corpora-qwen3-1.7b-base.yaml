@@ -1,0 +1,36 @@
+# Adaptation stage for E2++: masked next-token prediction with bidirectional attention on transcript text
+# from OUTSIDE the training corpus (about 130k documents, ~500M tokens, one pass), after the 20M-token stage on the
+# training transcripts (configs/adapt/mntp-qwen3-1.7b-base.yaml) was still improving when it stopped.
+# Labelled calls (any split) are excluded from the sample. E1++ would use the same text with the causal objective.
+experiment: e2
+name: adapt-mntp-corpora-qwen3-1.7b-base
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 32768
+model:
+  base: Qwen/Qwen3-1.7B-Base
+  attn: flash_attention_2
+  gradient_checkpointing: true
+  prefix_lm: true
+adapt:
+  objective: mntp
+  mask_prob: 0.2
+  mask_token: "<|image_pad|>"
+  corpora:
+    - {path: data/interim/callcenteren/train.jsonl, docs: 88933, val_docs: 100}   # all of it: real call-centre ASR, undiarised
+    - {path: data/interim/sporc/train.jsonl, docs: 35000, val_docs: 40}           # diarised podcasts, long; labelled episodes excluded
+    - {path: data/interim/meetingbank/train.jsonl, docs: 1218, val_docs: 10}      # all: council meetings, long, truncated at 32k
+    - {path: data/interim/courtlistener/train.jsonl, docs: 6400, val_docs: 10}    # all: oral arguments
+optim:
+  lr: 1.0e-5
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 500
+checkpoint_minutes: 30
+wandb_project: tt-pretrain
+tags: [adapt, corpora]

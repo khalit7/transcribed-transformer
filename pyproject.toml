@@ -4,11 +4,15 @@ version = "0.1.0"
 description = "Compliance QA over ASR call transcripts: decoder vs encoder-decoder vs API baseline"
 requires-python = ">=3.11"
 dependencies = [
+    "accelerate>=1.15.0",
+    "bitsandbytes>=0.50",
     "duckdb>=1.5.5",
     "faster-whisper>=1.2.1",
+    "flash-attn",
     "huggingface_hub>=0.34",
-    "nvidia-cublas-cu12>=12.9.2.10",
-    "nvidia-cudnn-cu12>=9.25.1.1",
+    "nvidia-cublas-cu12>=12.8",
+    "nvidia-cudnn-cu12>=9.10",
+    "peft>=0.20",
     "pyarrow>=25.0.1",
     "pydantic>=2.13.5",
     "pyyaml>=6.0.3",
@@ -17,6 +21,9 @@ dependencies = [
     "scipy>=1.17.1",
     "soundfile>=0.14.0",
     "tokenizers>=0.23.1",
+    "torch==2.8.0",
+    "transformers>=5.17",
+    "wandb>=0.30.0",
 ]
 
 [tool.uv]
@@ -26,3 +33,12 @@ package = false
 dev = [
     "pytest>=9.1.1",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3.post1/flash_attn-2.8.3.post1+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
