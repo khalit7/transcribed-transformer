@@ -86,6 +86,24 @@ def test_build_examples_masks_prompt(tmp_path):
     assert tok.decode(ids[:ex[0].n_prompt]).endswith(SEP)
 
 
+def test_build_examples_opens_with_the_tokenizer_start_token(tmp_path):
+    """A Gemma tokenizer adds <bos>; the prompt must carry it (T5Gemma 2 and Gemma 3 were trained with it)."""
+    import pytest
+    from transformers import AutoTokenizer
+
+    from src.train.data import build_examples
+    try:
+        tok = AutoTokenizer.from_pretrained("google/gemma-3-1b-pt", local_files_only=True)
+    except OSError:  # gated model not on this machine
+        pytest.skip("gemma-3-1b-pt tokenizer not cached")
+    split = tmp_path / "s.jsonl"
+    split.write_text(json.dumps({**REC, "source_id": "x", "meta": {}, "generation_info": {"name": "m", "labelled_variant": "clean"}}) + "\n")
+    ex, _ = build_examples(split, tok, ["labelled"], 32768)
+    ids = ex[0].input_ids.tolist()
+    assert ids[0] == tok.bos_token_id and ids.count(tok.bos_token_id) == 1 and ids[-1] == tok.eos_token_id
+    assert tok.decode(ids[ex[0].n_prompt:-1]) == target_text(Label.model_validate(REC["label"]), Q)
+
+
 def test_mntp_mask_is_deterministic_and_masks_only_real_tokens():
     import torch
 
@@ -102,3 +120,34 @@ def test_mntp_mask_is_deterministic_and_masks_only_real_tokens():
     assert torch.equal(a["labels"][masked], ids[masked])
     assert a["prompt_len"].tolist() == [5, 7]  # bidirectional over every real token
     assert not torch.equal(mntp_mask(batch, 0.5, mask_id=99, seed=4)["input_ids"], a["input_ids"])
+
+
+def test_collate_encdec_finetune_and_seq2seq():
+    import torch
+
+    from src.train.data import collate_encdec
+    ex = [Example(id="a", variant="c", input_ids=np.arange(10, 30, dtype=np.int32), n_prompt=15),
+          Example(id="b", variant="c", input_ids=np.arange(100, 108, dtype=np.int32), n_prompt=5)]
+    b = collate_encdec(ex, [0, 1], pad_id=0, start_id=999)
+    assert b["enc_ids"].shape == (2, 15) and b["dec_ids"].shape == (2, 5)
+    assert b["enc_ids"][1, 5:].eq(0).all() and b["enc_mask"][1].tolist() == [1] * 5 + [0] * 10
+    assert b["dec_ids"][0].tolist() == [999, 25, 26, 27, 28] and b["labels"][0].tolist() == [25, 26, 27, 28, 29]
+    assert b["dec_ids"][1].tolist() == [999, 105, 106, 0, 0] and b["labels"][1].tolist() == [105, 106, 107, -100, -100]
+    s = collate_encdec(ex, [0], pad_id=0, start_id=999, seed=1, seq2seq=True, max_target=3, cut=(0.5, 0.5))
+    assert s["enc_ids"].shape[1] == 10 and s["labels"][0].tolist() == [20, 21, 22] and s["dec_ids"][0].tolist() == [999, 20, 21]
+    assert torch.equal(collate_encdec(ex, [0], 0, 999, seed=2, seq2seq=True)["labels"], collate_encdec(ex, [0], 0, 999, seed=2, seq2seq=True)["labels"])
+
+
+def test_shard_units_lists_blocks_and_keeps_towers_whole():
+    """Every transformer block is a unit; a frozen image tower is one unit and its inner layers are not listed."""
+    import torch
+    from transformers import Qwen3Config, Qwen3ForCausalLM
+
+    from src.train.train import shard_units
+    model = Qwen3ForCausalLM(Qwen3Config(hidden_size=32, intermediate_size=64, num_hidden_layers=3, num_attention_heads=2,
+                                         num_key_value_heads=1, head_dim=16, vocab_size=100))
+    tower = torch.nn.Module()
+    tower.layers = torch.nn.ModuleList([torch.nn.Linear(4, 4), torch.nn.Linear(4, 4)])
+    model.vision_tower = tower
+    blocks, towers = shard_units(model)
+    assert len(blocks) == 3 and towers == [tower]

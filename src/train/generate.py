@@ -8,7 +8,9 @@ baseline is given. Greedy decoding. The output records carry the pair id, the va
 the raw text, and src/train/evaluate.py scores them; nothing here parses or repairs the output.
 vLLM runs in its own environment (.venv-vllm) because it pins its own torch; --backend hf is the
 slow fallback inside the training environment, and --backend prefixlm is the E2 path (bidirectional
-prefill with the prefix-LM mask, then ordinary cached decoding), also inside the training environment.
+prefill with the prefix-LM mask, then ordinary cached decoding), also inside the training environment;
+--backend encdec is the E3 path (encoder once, cached decoding with cross-attention); --backend hf_encdec
+is a native Hugging Face encoder-decoder (T5Gemma 2) through the library's own generate.
 """
 
 import argparse
@@ -44,7 +46,7 @@ def main() -> None:
     ap.add_argument("--max-model-len", type=int, default=32768)
     ap.add_argument("--tp", type=int, default=1)
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--backend", choices=["vllm", "hf", "prefixlm"], default="vllm")
+    ap.add_argument("--backend", choices=["vllm", "hf", "prefixlm", "encdec", "hf_encdec"], default="vllm")
     ap.add_argument("--batch", type=int, default=16, help="prefixlm backend: sequences per batch")
     args = ap.parse_args()
     pairs = load_pairs(args.split, args.variants.split(","), args.limit)
@@ -76,6 +78,12 @@ def main() -> None:
     elif args.backend == "prefixlm":
         with args.out.open("a") as f:
             generate_prefix_lm(args.model_dir, pairs, f, args.max_tokens, args.batch)
+    elif args.backend == "encdec":
+        with args.out.open("a") as f:
+            generate_encdec(args.model_dir, pairs, f, args.max_tokens, args.batch)
+    elif args.backend == "hf_encdec":
+        with args.out.open("a") as f:
+            generate_hf_encdec(args.model_dir, pairs, f, args.max_tokens, args.batch)
     else:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -174,6 +182,116 @@ def generate_prefix_lm(model_dir: str, pairs: list[tuple[str, str, str]], out, m
         for r, i in enumerate(idx):
             toks = []
             for t in gen_t[r]:
+                if t == eos:
+                    break
+                toks.append(t)
+            id_, v, _ = pairs[i]
+            out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+        out.flush()
+        if n_batches % 50 == 1:
+            print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
+
+
+
+def generate_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 32) -> None:
+    """Greedy decoding for the encoder-decoder (E3): encoder once per prompt (right-padded batch, key mask),
+    then cached causal decoding over the output with cross-attention to the fixed encoder states. Prompts
+    are length-sorted; the batch is capped by encoder tokens."""
+    import torch
+    from transformers import DynamicCache
+
+    from src.train.encdec import EncDec, load_tokenizer
+
+    tok = load_tokenizer(model_dir)
+    model = EncDec.load(model_dir, gradient_checkpointing=False).cuda().eval()
+    eos = tok.eos_token_id
+    pad = tok.pad_token_id if tok.pad_token_id is not None else eos
+    enc_all = tok([p for _, _, p in pairs], add_special_tokens=False)["input_ids"]
+    order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
+    t0 = time.time()
+    bi = 0
+    n_batches = 0
+    while bi < len(order):
+        longest = len(enc_all[order[min(bi + batch, len(order)) - 1]])
+        bs = max(1, min(batch, 160_000 // longest))
+        idx = order[bi:bi + bs]
+        bi += bs
+        n_batches += 1
+        seqs = [enc_all[i] for i in idx]
+        n = max(len(s) for s in seqs)
+        ids = torch.full((len(seqs), n), pad, dtype=torch.long)
+        mask = torch.zeros((len(seqs), n), dtype=torch.long)
+        for r, s in enumerate(seqs):
+            ids[r, :len(s)] = torch.tensor(s)
+            mask[r, :len(s)] = 1
+        ids, mask = ids.cuda(), mask.cuda()
+        with torch.no_grad():
+            enc = model.encode(ids, mask)
+            cache = DynamicCache()
+            cur = torch.full((len(seqs), 1), eos, dtype=torch.long, device="cuda")  # decoder start token
+            done = torch.zeros(len(seqs), dtype=torch.bool, device="cuda")
+            gen = []
+            for _ in range(max_tokens):
+                h = model.decode(cur, None, enc, mask, past=cache)
+                nxt = model.lm_head(h[:, -1]).argmax(-1)
+                nxt = torch.where(done, torch.full_like(nxt, pad), nxt)
+                gen.append(nxt)
+                done = done | (nxt == eos)
+                if bool(done.all()):
+                    break
+                cur = nxt[:, None]
+        gen_t = torch.stack(gen, 1).tolist()
+        for r, i in enumerate(idx):
+            toks = []
+            for t in gen_t[r]:
+                if t == eos:
+                    break
+                toks.append(t)
+            id_, v, _ = pairs[i]
+            out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+        out.flush()
+        if n_batches % 50 == 1:
+            print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
+
+
+def generate_hf_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 16) -> None:
+    """Greedy decoding for a native Hugging Face encoder-decoder (T5Gemma 2) through the library's generate.
+    Prompts open with the tokenizer's own start token, as in training; length-sorted, batched under an
+    encoder-token cap; the decoder starts from <bos>."""
+    import torch
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(model_dir)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_dir, dtype=torch.bfloat16, attn_implementation="sdpa").cuda().eval()
+    eos = tok.eos_token_id
+    pad = tok.pad_token_id if tok.pad_token_id is not None else eos
+    start = tok.bos_token_id if tok.bos_token_id is not None else eos
+    enc_all = tok([p for _, _, p in pairs])["input_ids"]
+    order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
+    t0 = time.time()
+    bi = 0
+    n_batches = 0
+    while bi < len(order):
+        longest = len(enc_all[order[min(bi + batch, len(order)) - 1]])
+        bs = max(1, min(batch, 160_000 // longest))
+        idx = order[bi:bi + bs]
+        bi += bs
+        n_batches += 1
+        seqs = [enc_all[i] for i in idx]
+        n = max(len(s) for s in seqs)
+        ids = torch.full((len(seqs), n), pad, dtype=torch.long)
+        mask = torch.zeros((len(seqs), n), dtype=torch.long)
+        for r, s in enumerate(seqs):
+            ids[r, :len(s)] = torch.tensor(s)
+            mask[r, :len(s)] = 1
+        with torch.no_grad():
+            gen = model.generate(input_ids=ids.cuda(), attention_mask=mask.cuda(), max_new_tokens=max_tokens,  # type: ignore[operator]
+                                 do_sample=False, num_beams=1, decoder_start_token_id=start, eos_token_id=eos, pad_token_id=pad)
+        for r, i in enumerate(idx):
+            toks = []
+            for t in gen[r, 1:].tolist():  # the row opens with the decoder start token
                 if t == eos:
                     break
                 toks.append(t)

@@ -1,0 +1,25 @@
+# E3: encoder-decoder fine-tune from the adapted checkpoint (configs/adapt/encdec-mixed-qwen3-1.7b-base.yaml).
+# Same data, split, steps and schedule as E1; encoder reads the prompt, decoder generates the JSON label.
+experiment: e3
+name: e3-qwen3-1.7b-base
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 32768
+model:
+  base: checkpoints/adapt-encdec-mixed-qwen3-1.7b-base/final
+  arch: encdec
+  attn: flash_attention_2
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-4
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 200
+checkpoint_minutes: 30
+wandb_project: tt-encdec
+tags: [adapted, corpora, Qwen/Qwen3-1.7B-Base, lora-r128]

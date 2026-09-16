@@ -1,0 +1,27 @@
+# E3, native reference, size control: T5Gemma 2 270m-270m (adapted from Gemma 3 270M), a third of Gemma 3 1B's
+# non-embedding parameters, under the recipe of configs/e3/t5gemma2-1b-1b.yaml. If it matches the Gemma 3 1B decoder,
+# parameter count is excluded as the explanation of the 1b-1b margin; if it lands well below, size is part of it.
+# Same 16k cap.
+experiment: e3
+name: e3-t5gemma2-270m-270m
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/t5gemma-2-270m-270m
+  arch: hf_encdec
+  attn: sdpa               # transformers has no flash-attention path for T5Gemma 2
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 200
+checkpoint_minutes: 30
+wandb_project: tt-encdec
+tags: [native, google/t5gemma-2-270m-270m, full-params, size-control]

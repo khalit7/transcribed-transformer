@@ -37,10 +37,15 @@ from src.train.data import (
     build_examples,
     build_transcript_examples,
     collate,
+    collate_encdec,
     labelled_doc_ids,
+    mask_encoder_side,
     mntp_mask,
     plan_epoch,
+    seq2seq_encoder_count,
+    seq2seq_target_count,
 )
+from src.train.encdec import EncDec
 from src.train.masks import FLEX_KERNEL_OPTIONS, prefix_lm_mask
 
 
@@ -66,6 +71,44 @@ def load_model(cfg: TrainConfig, device: torch.device):
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(cfg.model.base)
     attn = cfg.model.attn
+    if cfg.model.arch == "encdec":
+        if attn == "flash_attention_2":
+            try:
+                import flash_attn  # type: ignore[import-untyped]
+            except ImportError:
+                log("flash_attn not importable; falling back to sdpa")
+                attn = "sdpa"
+        model: torch.nn.Module
+        if EncDec.is_encdec_dir(cfg.model.base):
+            model = EncDec.load(cfg.model.base, attn, cfg.model.gradient_checkpointing)
+        else:
+            model = EncDec(cfg.model.base, attn, cfg.model.gradient_checkpointing, cfg.model.lora_r, cfg.model.lora_alpha)
+        if cfg.model.sharding == "fsdp":
+            if cfg.model.lora_r:
+                raise SystemExit("fsdp is for full-parameter training; drop lora_r")
+            return tok, shard_encdec(prepare_for_sharding(model, cfg, device)), attn
+        return tok, model.to(device), attn
+    if cfg.model.arch == "hf_encdec":
+        from transformers import AutoConfig, AutoModelForSeq2SeqLM
+        if cfg.model.lora_r:
+            raise SystemExit("hf_encdec trains every parameter (DDP or fsdp); drop lora_r")
+        hf_config = AutoConfig.from_pretrained(cfg.model.base)
+        cls = AutoModelForSeq2SeqLM._model_mapping[type(hf_config)]
+        if attn == "flash_attention_2" and not cls._supports_flash_attn:
+            log(f"{cls.__name__} has no flash-attention path in transformers; using sdpa")
+            attn = "sdpa"
+        if getattr(hf_config.get_text_config(decoder=True), "final_logit_softcapping", None):
+            raise SystemExit("hf_encdec: target_loss applies lm_head directly; this model's logit softcapping would be skipped")
+        hf = cls.from_pretrained(cfg.model.base, dtype=torch.bfloat16, attn_implementation=attn)
+        for n_, m in hf.named_modules():  # the image side of a multimodal encoder: never called, frozen
+            if n_.endswith(("vision_tower", "multi_modal_projector")):
+                m.requires_grad_(False)
+        if cfg.model.gradient_checkpointing:
+            hf.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        hf.config.use_cache = False
+        if cfg.model.sharding == "fsdp":
+            return tok, shard_hf(prepare_for_sharding(hf, cfg, device)), attn
+        return tok, hf.to(device), attn
     if cfg.model.prefix_lm and attn == "flash_attention_2":
         attn = "flex_attention"  # FA2 cannot express the prefix-LM mask
     if attn == "flash_attention_2":
@@ -75,21 +118,127 @@ def load_model(cfg: TrainConfig, device: torch.device):
             log("flash_attn not importable; falling back to sdpa")
             attn = "sdpa"
     model = AutoModelForCausalLM.from_pretrained(cfg.model.base, dtype=torch.bfloat16, attn_implementation=attn)
+    for n_, m in model.named_modules():  # a multimodal checkpoint's image side (Gemma 3 4B+): never called, frozen
+        if n_.endswith(("vision_tower", "multi_modal_projector")):
+            m.requires_grad_(False)
     if cfg.model.gradient_checkpointing:
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.config.use_cache = False
+    if cfg.model.sharding == "fsdp":
+        return tok, shard_hf(prepare_for_sharding(model, cfg, device)), attn
     return tok, model.to(device), attn  # type: ignore[arg-type]
 
 
-def target_loss(model, batch: dict, device: torch.device, prefix_lm: str | None = None) -> tuple[torch.Tensor, int]:
+def prepare_for_sharding(model, cfg: TrainConfig, device: torch.device):
+    """The weights as the optimizer will own them, on the device before sharding: fp32 under the master-copy
+    recipe, bf16 under stochastic rounding."""
+    if cfg.optim.weights == "fp32_master":
+        model = model.float()
+    return model.to(device)
+
+
+def shard_units(model) -> tuple[list[torch.nn.Module], list[torch.nn.Module]]:
+    """FSDP2 units for a Hugging Face model: every transformer block (each element of a ModuleList named
+    `layers`, outside any image tower) and, as one unit each, a frozen image tower and its projector. The
+    rest (embeddings, norms, head) belongs to the root. Children are sharded before parents, so a tower's
+    own inner layers are not listed separately."""
+    towers = [(n, m) for n, m in model.named_modules() if n.endswith(("vision_tower", "multi_modal_projector"))]
+    blocks: list[torch.nn.Module] = []
+    for n, m in model.named_modules():
+        if isinstance(m, torch.nn.ModuleList) and n.endswith("layers") and not any(n.startswith(t + ".") for t, _ in towers):
+            blocks.extend(m)
+    return blocks, [m for _, m in towers]
+
+
+class ShardedHF(torch.nn.Module):
+    """A Hugging Face model behind one forward that computes the task loss. Under FSDP2 the root unit's
+    parameters (embeddings, norms, the tied head) are gathered by the call the loop makes, so the loop must
+    call the root; calling the inner `.model` directly bypasses the root's hooks (mixed Tensor/DTensor error)."""
+
+    def __init__(self, hf: torch.nn.Module):
+        super().__init__()
+        self.hf = hf
+        self.config = hf.config
+
+    def forward(self, batch: dict, device: torch.device, prefix_lm: str | None = None) -> tuple[torch.Tensor, int]:
+        return hf_task_loss(self.hf, batch, device, prefix_lm)
+
+
+def shard_hf(model) -> ShardedHF:
+    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+    mp = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16)
+    blocks, towers = shard_units(model)
+    for m in blocks + towers:
+        fully_shard(m, mp_policy=mp)
+    wrapped = ShardedHF(model)
+    fully_shard(wrapped, mp_policy=mp)
+    return wrapped
+
+
+def shard_encdec(model: EncDec) -> EncDec:
+    """FSDP2 over the encoder-decoder: every parameter fp32 and sharded, bf16 compute and gradient reduction,
+    units at the granularity the code calls (the encoder's layers run through their own forward; the decoder
+    loop calls self-attention, MLP and cross-attention modules directly, so those are the units; the rest
+    belongs to the root)."""
+    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+    mp = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16)
+    for layer in model.encoder.layers:
+        fully_shard(layer, mp_policy=mp)
+    for layer in model.decoder.layers:
+        fully_shard(layer.self_attn, mp_policy=mp)
+        fully_shard(layer.mlp, mp_policy=mp)
+    for c in model.cross:
+        fully_shard(c, mp_policy=mp)
+    fully_shard(model, mp_policy=mp)
+    return model
+
+
+def is_sharded(model) -> bool:
+    return any(type(p).__name__ == "DTensor" for p in model.parameters())
+
+
+def target_loss(model, batch: dict, device: torch.device, prefix_lm: str | None = None,
+                mntp_weight: float = 1.0, parts: dict | None = None) -> tuple[torch.Tensor, int]:
     """Sum of cross-entropy over target tokens. Hidden states at the positions that predict a target
     token go through lm_head; nothing else does. `prefix_lm` names the attention implementation when
     the prompt is attended bidirectionally (E2); None keeps the causal mask (E1)."""
+    raw = model.module if isinstance(model, DDP) else model
+    if isinstance(raw, ShardedHF):
+        return raw(batch, device, prefix_lm)  # the root forward: FSDP2 gathers the root's parameters
+    labels = batch["labels"].to(device, non_blocking=True)
+    if isinstance(raw, EncDec):
+        hidden, enc = raw(batch["enc_ids"].to(device, non_blocking=True), batch["enc_mask"].to(device, non_blocking=True),
+                          batch["dec_ids"].to(device, non_blocking=True), batch["dec_mask"].to(device, non_blocking=True))
+        mask = labels != -100  # decoder input is already shifted: position t predicts labels[t]
+        loss = chunked_ce(raw.lm_head, hidden[mask], labels[mask])
+        n = int(mask.sum())
+        if "enc_labels" in batch:  # mixed objective: MNTP on the encoder's own states, position t predicts token t+1
+            el = batch["enc_labels"].to(device, non_blocking=True)[:, 1:]
+            em = el != -100
+            enc_loss = chunked_ce(raw.lm_head, enc[:, :-1][em], el[em])
+            if parts is not None:  # per-component sums and counts, for the val report
+                parts["seq2seq"] += loss.detach(); parts["seq2seq_n"] += n
+                parts["mntp"] += enc_loss.detach(); parts["mntp_n"] += int(em.sum())
+            loss = loss + mntp_weight * enc_loss
+            n += int(em.sum())
+        return loss, n
+    return hf_task_loss(raw, batch, device, prefix_lm)
+
+
+def hf_task_loss(raw, batch: dict, device: torch.device, prefix_lm: str | None) -> tuple[torch.Tensor, int]:
+    """target_loss for a Hugging Face model: its encoder-decoder or decoder forward, chunked CE at the target positions."""
+    labels = batch["labels"].to(device, non_blocking=True)
+    if getattr(raw.config, "is_encoder_decoder", False):  # hf_encdec: the library's own encoder-decoder forward
+        out = raw.model(input_ids=batch["enc_ids"].to(device, non_blocking=True),
+                        attention_mask=batch["enc_mask"].to(device, non_blocking=True),
+                        decoder_input_ids=batch["dec_ids"].to(device, non_blocking=True),
+                        decoder_attention_mask=batch["dec_mask"].to(device, non_blocking=True), use_cache=False)
+        mask = labels != -100
+        return chunked_ce(raw.lm_head, out.last_hidden_state[mask], labels[mask]), int(mask.sum())
     ids = batch["input_ids"].to(device, non_blocking=True)
     attn = batch["attention_mask"].to(device, non_blocking=True)
-    labels = batch["labels"].to(device, non_blocking=True)
-    base = model.module.model if isinstance(model, DDP) else model.model
-    head = model.module.lm_head if isinstance(model, DDP) else model.lm_head
+    base = raw.model
+    head = raw.lm_head
     if prefix_lm:
         mask = prefix_lm_mask(batch["prompt_len"].to(device), attn.sum(1), ids.shape[1], prefix_lm)
         extra = {"kernel_options": FLEX_KERNEL_OPTIONS} if prefix_lm == "flex_attention" else {}
@@ -103,6 +252,7 @@ def target_loss(model, batch: dict, device: torch.device, prefix_lm: str | None 
 
 
 CE_CHUNK = 1024
+VAL_PARTS: dict = {}  # the last val's mixed-objective halves, for wandb
 
 
 def chunked_ce(head, h: torch.Tensor, tgt: torch.Tensor) -> torch.Tensor:
@@ -127,6 +277,72 @@ def lr_at(step: int, total: int, cfg: TrainConfig) -> float:
         return o.lr * (step + 1) / o.warmup_steps
     p = min(1.0, (step - o.warmup_steps) / max(1, total - o.warmup_steps))
     return o.lr * (o.min_lr_ratio + (1 - o.min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * p)))
+
+
+class ShardOptimizer:
+    """8-bit AdamW over the local shards of an FSDP2 model. fp32_master: the sharded fp32 params are the
+    masters, FSDP casts to bf16 for compute (bitsandbytes). bf16_sr: the sharded params are bf16 and torchao's
+    kernel applies the fp32-computed update with stochastic rounding, so steps below bf16's resolution survive
+    in expectation. Gradients arrive as sharded DTensors and are handed to leaf views of the shards."""
+
+    def __init__(self, model, cfg: TrainConfig):
+        import bitsandbytes as bnb
+        self.params = [p for p in model.parameters() if p.requires_grad]
+        self.names = [n for n, p in model.named_parameters() if p.requires_grad]
+        self.locals = [p.to_local().detach().requires_grad_(True) for p in self.params]  # leaves sharing the storage
+        decay: list[torch.Tensor] = []
+        no_decay: list[torch.Tensor] = []
+        for n, loc in zip(self.names, self.locals):
+            (no_decay if loc.ndim < 2 or "norm" in n or "bias" in n else decay).append(loc)
+        groups = [{"params": decay, "weight_decay": cfg.optim.weight_decay}, {"params": no_decay, "weight_decay": 0.0}]
+        if cfg.optim.weights == "bf16_sr":
+            if any(loc.dtype != torch.bfloat16 for loc in self.locals):
+                raise SystemExit("optim.weights: bf16_sr expects bf16 sharded parameters")
+            from torchao.optim import AdamW8bit
+            self.opt = AdamW8bit(groups, lr=cfg.optim.lr, betas=cfg.optim.betas, bf16_stochastic_round=True)
+        else:
+            self.opt = bnb.optim.AdamW8bit(groups, lr=cfg.optim.lr, betas=cfg.optim.betas)
+        self.clip = cfg.optim.grad_clip
+        self.model = model
+
+    @property
+    def param_groups(self):
+        return self.opt.param_groups
+
+    def set_lr(self, lr: float) -> None:
+        for g in self.opt.param_groups:
+            if isinstance(g["lr"], torch.Tensor):  # torchao keeps lr as a tensor and refuses a float
+                g["lr"].fill_(lr)
+            else:
+                g["lr"] = lr
+
+    @torch.no_grad()
+    def step(self) -> float:
+        # global norm in fp32 over the local shards (the DTensor path would accumulate in the gradient dtype)
+        sq = torch.zeros((), device=self.locals[0].device, dtype=torch.float32)
+        for p in self.params:
+            if p.grad is not None:
+                sq += p.grad.to_local().float().pow(2).sum()
+        if dist.is_initialized():
+            dist.all_reduce(sq)
+        norm = sq.sqrt()
+        scale = torch.clamp(self.clip / (norm + 1e-6), max=1.0)
+        for p, loc in zip(self.params, self.locals):
+            if p.grad is not None:
+                loc.grad = p.grad.to_local().mul_(scale)
+            else:
+                loc.grad = None
+            p.grad = None
+        self.opt.step()
+        for loc in self.locals:
+            loc.grad = None
+        return float(norm)
+
+    def state_dict(self) -> dict:
+        return {"opt": self.opt.state_dict()}  # per rank; the model's own (sharded) state carries the masters
+
+    def load_state_dict(self, d: dict) -> None:
+        self.opt.load_state_dict(d["opt"])
 
 
 class MasterOptimizer:
@@ -154,6 +370,10 @@ class MasterOptimizer:
     @property
     def param_groups(self):
         return self.opt.param_groups
+
+    def set_lr(self, lr: float) -> None:
+        for g in self.opt.param_groups:
+            g["lr"] = lr
 
     @torch.no_grad()
     def step(self) -> float:
@@ -187,16 +407,43 @@ def flops_of(n_params: int, n_layers: int, d_model: int, lengths: list[int]) -> 
     return 6 * n_params * tokens + 6 * n_layers * d_model * sum(l * l for l in lengths)
 
 
+def full_state_dict(model) -> dict:
+    """The model's state dict as plain tensors on CPU: gathered from the shards when sharded (every rank must call)."""
+    if is_sharded(model):
+        from torch.distributed.checkpoint.state_dict import (
+            StateDictOptions,
+            get_model_state_dict,
+        )
+        return get_model_state_dict(model, options=StateDictOptions(full_state_dict=True, cpu_offload=True))
+    raw = model.module if isinstance(model, DDP) else model
+    return raw.state_dict()
+
+
 def save_checkpoint(path: Path, model, opt, step: int, epoch: int, cfg: TrainConfig, rank: int) -> None:
+    tmp = path.with_suffix(".tmp")
     if rank == 0:
-        tmp = path.with_suffix(".tmp")
         if tmp.exists():
             shutil.rmtree(tmp)
         tmp.mkdir(parents=True)
-        raw = model.module if isinstance(model, DDP) else model
-        torch.save(raw.state_dict(), tmp / "model.pt")
+    if dist.is_initialized():
+        dist.barrier(device_ids=[torch.cuda.current_device()])
+    world = dist.get_world_size() if dist.is_initialized() else 1
+    if rank == 0:
+        (tmp / "state.json").write_text(json.dumps({"step": step, "epoch": epoch, "world": world, "config": cfg.model_dump(mode="json")}))
+    if is_sharded(model):  # each rank writes its own shards: no gather, no full copy in system memory (30 GB at 7.5B)
+        plain = [n for n, p in model.named_parameters() if p.requires_grad and type(p).__name__ != "DTensor"]
+        if plain:
+            raise SystemExit(f"trainable parameters outside any FSDP unit (their gradients would never be reduced): {plain[:8]}")
+        shards = {n: p.to_local().detach().cpu() for n, p in model.named_parameters() if p.requires_grad}
+        torch.save(shards, tmp / f"model-rank{rank}.pt")
+        del shards
+        torch.save(opt.state_dict(), tmp / f"optim-rank{rank}.pt")
+    elif rank == 0:
+        torch.save(full_state_dict(model), tmp / "model.pt")
         torch.save(opt.state_dict(), tmp / "optim.pt")
-        (tmp / "state.json").write_text(json.dumps({"step": step, "epoch": epoch, "config": cfg.model_dump(mode="json")}))
+    if dist.is_initialized():
+        dist.barrier(device_ids=[torch.cuda.current_device()])
+    if rank == 0:
         if path.exists():
             shutil.rmtree(path)
         tmp.rename(path)
@@ -206,28 +453,39 @@ def save_checkpoint(path: Path, model, opt, step: int, epoch: int, cfg: TrainCon
 
 
 def latest_checkpoint(run_dir: Path) -> Path | None:
-    cks = sorted(run_dir.glob("step-*"), key=lambda p: int(p.name.split("-")[1]))
+    # a step-N.tmp directory is a save that never finished (e.g. a hang mid-checkpoint): not a checkpoint
+    cks = sorted((p for p in run_dir.glob("step-*") if p.name.split("-")[1].isdigit()), key=lambda p: int(p.name.split("-")[1]))
     return cks[-1] if cks else None
 
 
 @torch.no_grad()
 def val_loss(model, examples: list[Example], idx: list[int], world: int, rank: int, device, pad_id: int,
-             micro_tokens: int, prefix_lm: str | None, prepare=None) -> float:
-    pad_kw = {"pad_to": 128, "min_len": 256} if prefix_lm else {}
+             micro_tokens: int, prefix_lm: str | None, make_batch, mntp_weight: float = 1.0) -> float:
     model.eval()
     total = torch.zeros(2, device=device)
     mine = idx[rank::world]
     plan = plan_epoch([examples[i] for i in mine], max(1, len(mine)), micro_tokens, 1, 0, 0) if mine else []
-    for step in plan:
-        for micro in step.micro[0]:
-            batch = collate([examples[i] for i in mine], micro, pad_id, **pad_kw)
-            if prepare is not None:
-                batch = prepare(batch, hash(tuple(micro)) & 0xFFFF)
-            loss, n = target_loss(model, batch, device, prefix_lm)
+    micros = [micro for step in plan for micro in step.micro[0]]
+    n_local = torch.tensor([len(micros)], device=device)
+    if is_sharded(model):  # every rank must run the same number of forward passes
+        n_all = n_local.clone()
+        dist.all_reduce(n_all, op=dist.ReduceOp.MAX)
+        micros += [micros[0]] * (int(n_all.item()) - len(micros))
+    parts: dict = {"seq2seq": torch.zeros((), device=device), "seq2seq_n": 0, "mntp": torch.zeros((), device=device), "mntp_n": 0}
+    for k, micro in enumerate(micros):
+        batch = make_batch([examples[i] for i in mine], micro, hash(tuple(micro)) & 0xFFFF)
+        loss, n = target_loss(model, batch, device, prefix_lm, mntp_weight, parts if k < int(n_local.item()) else None)
+        if k < int(n_local.item()):
             total += torch.tensor([loss.item(), n], device=device)
+    comp = torch.tensor([float(parts["seq2seq"]), parts["seq2seq_n"], float(parts["mntp"]), parts["mntp_n"]], device=device)
     if dist.is_initialized():
         dist.all_reduce(total)
+        dist.all_reduce(comp)
     model.train()
+    if comp[3] > 0:  # mixed objective: report the halves too
+        vs, vm = comp[0].item() / max(1, comp[1].item()), comp[2].item() / max(1, comp[3].item())
+        log(f"  val components: seq2seq {vs:.4f} ({int(comp[1].item())} tokens), mntp {vm:.4f} ({int(comp[3].item())} tokens)")
+        VAL_PARTS.update({"val_loss_seq2seq": vs, "val_loss_mntp": vm})
     return (total[0] / total[1].clamp(min=1)).item()
 
 
@@ -256,13 +514,52 @@ def main() -> None:
         return mntp_mask(batch, mask_prob, mask_id, seed) if mntp else batch
 
     pad_kw = {"pad_to": 128, "min_len": 256} if prefix_lm else {}
+    encdec = cfg.model.arch in ("encdec", "hf_encdec")
+    # decoder start token: the tokenizer's <bos> for a native encoder-decoder (what T5Gemma 2 was trained with), eos for E3
+    start_id = tok.bos_token_id if cfg.model.arch == "hf_encdec" and tok.bos_token_id is not None else tok.eos_token_id
+    seq2seq = adapt is not None and adapt.objective in ("seq2seq", "mixed")
+    mixed = adapt is not None and adapt.objective == "mixed"
+    if seq2seq and not encdec:
+        raise SystemExit("seq2seq/mixed adaptation needs model.arch: encdec")
+    if mixed and adapt is not None:
+        mask_id = int(tok.convert_tokens_to_ids(adapt.mask_token))
+        mask_prob = adapt.mask_prob
+
+    def batch_seed(step: int, rank_: int, k: int) -> int:
+        return cfg.seed * 1_000_003 + step * 64 + rank_ * 8 + k
+
+    def step_denominator(st: Step, step: int) -> float:
+        """Supervised tokens in the step over all ranks: planned target tokens (times the masked share under
+        MNTP), or, for seq2seq, the continuation lengths every rank will draw, recomputed from the seeds."""
+        if seq2seq and adapt is not None:
+            total = 0.0
+            for r, rank_micro in enumerate(st.micro):
+                for k, micro in enumerate(rank_micro):
+                    sd = batch_seed(step, r, k)
+                    total += seq2seq_target_count(train, micro, sd, adapt.max_target, adapt.cut)
+                    if mixed:  # expected masked encoder tokens
+                        total += mask_prob * seq2seq_encoder_count(train, micro, sd, adapt.max_target, adapt.cut)
+            return total
+        return st.target_tokens * supervised_share
+
+    def make_batch(examples: list[Example], micro: list[int], seed: int) -> dict:
+        if encdec:
+            b = collate_encdec(examples, micro, pad_id, start_id, seed, seq2seq,
+                               adapt.max_target if adapt else 2048, adapt.cut if adapt else (0.25, 0.75))
+            return mask_encoder_side(b, mask_prob, mask_id, seed + 1) if mixed else b
+        return prepare(collate(examples, micro, pad_id, **pad_kw), seed)
 
     # loss normaliser per step: the group's target tokens, or their expected masked share under MNTP
     # (the realised count differs by a few per cent; using the expectation avoids a collective)
     supervised_share = mask_prob if mntp else 1.0
     n_params = sum(p.numel() for p in model.parameters())
-    n_layers, d_model = model.config.num_hidden_layers, model.config.hidden_size
-    log(f"{cfg.model.base}: {n_params / 1e9:.2f}B params, attn={attn}, world={world}")
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    tc = model.config.get_text_config(decoder=True) if hasattr(model.config, "get_text_config") else model.config
+    n_layers, d_model = tc.num_hidden_layers, tc.hidden_size
+    if encdec:
+        n_layers *= 2  # encoder and decoder both run over their inputs; a rough MFU term
+    n_flops_params = n_trainable if cfg.model.arch == "hf_encdec" else n_params  # the frozen image tower never runs
+    log(f"{cfg.model.base}: {n_params / 1e9:.2f}B params ({n_trainable / 1e9:.2f}B trainable), attn={attn}, world={world}")
 
     def data():
         limit = cfg.batch_sequences * args.smoke * 2 or None
@@ -295,14 +592,26 @@ def main() -> None:
         total_steps = args.smoke
     log(f"{steps_per_epoch} steps/epoch, {total_steps} total")
 
-    if world > 1:
+    if world > 1 and not is_sharded(model):
         model = DDP(model, device_ids=[device.index], gradient_as_bucket_view=True)
-    opt = MasterOptimizer(model, cfg)
+    opt = ShardOptimizer(model, cfg) if is_sharded(model) else MasterOptimizer(model, cfg)
     step0 = 0
     if args.resume and (ck := latest_checkpoint(run_dir)):
-        raw = model.module if isinstance(model, DDP) else model
-        raw.load_state_dict(torch.load(ck / "model.pt", map_location=device))
-        opt.load_state_dict(torch.load(ck / "optim.pt", map_location=device))
+        if is_sharded(model):
+            saved_world = json.loads((ck / "state.json").read_text()).get("world", world)
+            if saved_world != world:
+                raise SystemExit(f"checkpoint {ck} holds {saved_world} shards; this run has {world} ranks")
+            shards = torch.load(ck / f"model-rank{rank}.pt", map_location=device)
+            with torch.no_grad():
+                for n, p in model.named_parameters():
+                    if p.requires_grad:
+                        p.to_local().copy_(shards[n])
+            del shards
+            opt.load_state_dict(torch.load(ck / f"optim-rank{rank}.pt", map_location=device))
+        else:
+            raw = model.module if isinstance(model, DDP) else model
+            raw.load_state_dict(torch.load(ck / "model.pt", map_location=device))
+            opt.load_state_dict(torch.load(ck / "optim.pt", map_location=device))
         step0 = json.loads((ck / "state.json").read_text())["step"]
         log(f"resumed from {ck} at step {step0}")
 
@@ -310,7 +619,7 @@ def main() -> None:
     if use_wandb:
         import wandb
         wandb.init(project=cfg.wandb_project, name=cfg.name, tags=cfg.wandb_tags(), dir=str(run_dir),
-                   config={**cfg.model_dump(mode="json"), "attn_used": attn, "n_params": n_params,
+                   config={**cfg.model_dump(mode="json"), "attn_used": attn, "n_params": n_params, "n_trainable": n_trainable,
                            "train_stats": tstats, "val_stats": vstats, "world_size": world},
                    id=(run_dir / "wandb_id").read_text().strip() if (run_dir / "wandb_id").exists() else None,
                    resume="allow")
@@ -329,61 +638,124 @@ def main() -> None:
 
     tokens_seen = epoch * sum(step_tokens(s) for s in plan) + sum(step_tokens(s) for s in plan[:step % steps_per_epoch])
     window_flops, window_tokens, window_t0 = 0.0, 0, time.time()
+    window_comp = torch.zeros(4, device=device)  # mixed objective: seq2seq sum, tokens, mntp sum, tokens over the log window
+    if step == 0 and vidx and not args.smoke:  # val before any update: the starting point of every curve
+        vl = val_loss(model, val, vidx, world, rank, device, pad_id, cfg.micro_tokens, prefix_lm, make_batch,
+                      adapt.mntp_weight if adapt else 1.0)
+        log(f"step 0: val_loss {vl:.4f}")
+        if use_wandb:
+            wandb.log({"val_loss": vl, **VAL_PARTS}, step=0)
     while step < total_steps:
         if step // steps_per_epoch != epoch:
             epoch = step // steps_per_epoch
             plan = plan_epoch(train, cfg.batch_sequences, cfg.micro_tokens, world, cfg.seed, epoch)
         st: Step = plan[step % steps_per_epoch]
         lr = lr_at(step, total_steps, cfg)
-        for g in opt.param_groups:
-            g["lr"] = lr
-        micros = st.micro[rank]
+        opt.set_lr(lr)
+        micros = list(st.micro[rank])
+        n_dummy = 0
+        if is_sharded(model):  # FSDP: every rank must run the same number of forward/backward passes per step
+            n_max = max(len(m) for m in st.micro)
+            n_dummy = n_max - len(micros)
+            micros += [micros[0]] * n_dummy  # extra passes whose loss is zeroed below
+        denom = step_denominator(st, step)
         loss_sum = torch.zeros((), device=device)
+        parts: dict = {"seq2seq": torch.zeros((), device=device), "seq2seq_n": 0, "mntp": torch.zeros((), device=device), "mntp_n": 0}
         for k, micro in enumerate(micros):
-            batch = prepare(collate(train, micro, pad_id, **pad_kw), cfg.seed * 1_000_003 + step * 64 + rank * 8 + k)
-            sync = contextlib.nullcontext() if (k == len(micros) - 1 or world == 1) else model.no_sync()
+            dummy = k >= len(micros) - n_dummy
+            batch = make_batch(train, micro, batch_seed(step, rank, k))
+            # DDP: reduce only on the last micro-batch. FSDP: reduce every micro-batch (gradients accumulate in the
+            # sharded fp32 .grad; deferring the reduction would hold full-size unsharded gradients instead)
+            sync = contextlib.nullcontext() if (k == len(micros) - 1 or world == 1 or is_sharded(model)) else model.no_sync()
             with sync:
-                loss, _ = target_loss(model, batch, device, prefix_lm)
-                (loss * world / (st.target_tokens * supervised_share)).backward()
+                loss, _ = target_loss(model, batch, device, prefix_lm, adapt.mntp_weight if adapt else 1.0,
+                                      None if dummy else parts)
+                if dummy:
+                    loss = loss * 0.0
+                (loss * world / denom).backward()
             loss_sum += loss.detach()
         grad_norm = opt.step()
         step += 1
         if dist.is_initialized():
             dist.all_reduce(loss_sum)
+        comp = torch.tensor([float(parts["seq2seq"]), parts["seq2seq_n"], float(parts["mntp"]), parts["mntp_n"]], device=device)
+        if dist.is_initialized():
+            dist.all_reduce(comp)
+        window_comp += comp
         # throughput counters come from the plan, which every rank holds in full: no collective needed
-        # (E2 showed the float64 all-reduce of these counters returning garbage in the window after a checkpoint)
+        # (E2 showed the float64 all-reduce of these counters returning garbage in the window after a checkpoint:
+        # the ranks had checkpointed one step apart, see do_ck above, and the mismatched collectives completed with junk)
         step_lengths = [len(train[i].input_ids) for rank_micro in st.micro for micro in rank_micro for i in micro]
         window_tokens += sum(step_lengths)
-        window_flops += flops_of(n_params, n_layers, d_model, step_lengths)
+        window_flops += flops_of(n_flops_params, n_layers, d_model, step_lengths)
         tokens_seen += sum(step_lengths)
         if step % cfg.log_every == 0 or step == total_steps:
             dt = time.time() - window_t0
             mfu = window_flops / dt / (cfg.peak_tflops * 1e12 * world)
             mem = torch.cuda.max_memory_allocated(device) / 2**30
-            rec = {"step": step, "loss": loss_sum.item() / (st.target_tokens * supervised_share), "lr": lr, "grad_norm": grad_norm,
+            rec = {"step": step, "loss": loss_sum.item() / denom, "lr": lr, "grad_norm": grad_norm,
                    "tokens_seen": tokens_seen, "tokens_per_s": window_tokens / dt, "mfu": mfu,
                    f"gpu{rank}_mem_gib": mem, "epoch": step / steps_per_epoch}
+            if window_comp[3] > 0:  # the two halves of the mixed objective, each over its own tokens in the window
+                rec["loss_seq2seq"] = window_comp[0].item() / max(1.0, window_comp[1].item())
+                rec["loss_mntp"] = window_comp[2].item() / max(1.0, window_comp[3].item())
+            window_comp.zero_()
             log(json.dumps({k: (float(f"{v:.4g}") if isinstance(v, float) else v) for k, v in rec.items()}))
             if use_wandb:
                 wandb.log(rec, step=step)
             window_flops, window_tokens, window_t0 = 0.0, 0, time.time()
         if (step % cfg.val_every == 0 or step == total_steps) and vidx:
-            vl = val_loss(model, val, vidx, world, rank, device, pad_id, cfg.micro_tokens, prefix_lm, prepare)
+            vl = val_loss(model, val, vidx, world, rank, device, pad_id, cfg.micro_tokens, prefix_lm, make_batch,
+                          adapt.mntp_weight if adapt else 1.0)
             log(f"step {step}: val_loss {vl:.4f}")
             if use_wandb:
-                wandb.log({"val_loss": vl}, step=step)
-        if not args.smoke and (time.time() - t_ck > cfg.checkpoint_minutes * 60 or step == total_steps):
+                wandb.log({"val_loss": vl, **VAL_PARTS}, step=step)
+        do_ck = time.time() - t_ck > cfg.checkpoint_minutes * 60 or step == total_steps
+        if dist.is_initialized():  # a wall-clock decision must be the same on every rank: rank 0's clock decides
+            flag = torch.tensor([int(do_ck)], device=device)  # (ranks that disagreed by one step sent their
+            dist.broadcast(flag, 0)  # checkpoint barriers against the other rank's loss all-reduces: a hang)
+            do_ck = bool(flag.item())
+        if not args.smoke and do_ck:
             save_checkpoint(run_dir / f"step-{step}", model, opt, step, epoch, cfg, rank)
-            for old in sorted(run_dir.glob("step-*"), key=lambda p: int(p.name.split("-")[1]))[:-2]:
+            for old in sorted((p for p in run_dir.glob("step-*") if p.name.split("-")[1].isdigit()), key=lambda p: int(p.name.split("-")[1]))[:-2]:
                 if rank == 0:
                     shutil.rmtree(old)
             t_ck = time.time()
 
-    if not args.smoke and rank == 0:
+    if not args.smoke and is_sharded(model):
+        # gather parameter by parameter (collective), rank 0 keeps a bf16 CPU copy: 15 GB at 7.5B, on one rank only
+        sd: dict[str, torch.Tensor] = {}
+        for n, p in model.named_parameters():
+            t = p.full_tensor() if type(p).__name__ == "DTensor" else p
+            if rank == 0:
+                sd[n.removeprefix("hf.")] = t.detach().to(torch.bfloat16).cpu()
+            del t
+        if rank == 0:
+            final = run_dir / "final"
+            final.mkdir(parents=True, exist_ok=True)
+            if isinstance(model, EncDec):
+                torch.save(sd, final / "encdec.pt")
+                base = cfg.model.base if not EncDec.is_encdec_dir(cfg.model.base) else json.loads((Path(cfg.model.base) / "encdec.json").read_text())["base"]
+                (final / "encdec.json").write_text(json.dumps({"base": base, "attn": attn, "lora_r": 0, "lora_alpha": 0}))
+            else:
+                from safetensors.torch import save_file
+                inner = model.hf if isinstance(model, ShardedHF) else model
+                inner.config.save_pretrained(final)
+                if getattr(inner, "generation_config", None) is not None:
+                    inner.generation_config.save_pretrained(final)
+                save_file(sd, str(final / "model.safetensors"), metadata={"format": "pt"})
+            tok.save_pretrained(final)
+            (final / "train_config.json").write_text(json.dumps(cfg.model_dump(mode="json"), indent=1))
+            log(f"final bf16 model -> {final} ({(time.time() - t_start) / 3600:.2f} h)")
+        del sd
+    elif not args.smoke and rank == 0:
         raw = model.module if isinstance(model, DDP) else model
         final = run_dir / "final"
-        raw.save_pretrained(final, safe_serialization=True)
-        tok.save_pretrained(final)
+        if isinstance(raw, EncDec):
+            raw.save(final, tok)
+        else:
+            raw.save_pretrained(final, safe_serialization=True)
+            tok.save_pretrained(final)
         (final / "train_config.json").write_text(json.dumps(cfg.model_dump(mode="json"), indent=1))
         log(f"final bf16 model -> {final} ({(time.time() - t_start) / 3600:.2f} h)")
     if use_wandb:

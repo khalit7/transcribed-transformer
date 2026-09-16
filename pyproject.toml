@@ -22,6 +22,7 @@ dependencies = [
     "soundfile>=0.14.0",
     "tokenizers>=0.23.1",
     "torch==2.8.0",
+    "torchao==0.13.0",
     "transformers>=5.17",
     "wandb>=0.30.0",
 ]

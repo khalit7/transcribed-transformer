@@ -106,7 +106,8 @@ def build_examples(path: Path, tokenizer, variants: list[str], max_seq_len: int,
         nonlocal dropped
         if not pending:
             return
-        enc_p = tokenizer([p for _, _, p, _ in pending], add_special_tokens=False)["input_ids"]
+        # the prompt opens with the tokenizer's own start token when it has one (<bos> for Gemma; Qwen adds nothing)
+        enc_p = tokenizer([p for _, _, p, _ in pending])["input_ids"]
         enc_t = tokenizer([t for _, _, _, t in pending], add_special_tokens=False)["input_ids"]
         for (id_, v, _, _), ip, it in zip(pending, enc_p, enc_t):
             if len(ip) + len(it) + 1 > max_seq_len:
@@ -301,6 +302,66 @@ def mntp_mask(batch: dict[str, torch.Tensor], mask_prob: float, mask_id: int, se
     labels = torch.full_like(batch["labels"], -100)
     labels[chosen] = batch["input_ids"][chosen]
     return {**batch, "input_ids": ids, "labels": labels, "prompt_len": batch["attention_mask"].sum(1)}
+
+
+def seq2seq_cuts(examples: list[Example], idx: list[int], seed: int, max_target: int, cut: tuple[float, float]) -> list[int]:
+    """The cut point per example for a seq2seq micro-batch, deterministic in the seed; collate_encdec and the
+    loss normaliser both use it, so every rank can compute every rank's supervised-token count."""
+    rng = random.Random(seed)
+    out = []
+    for i in idx:
+        n = len(examples[i].input_ids)
+        c = int(n * rng.uniform(*cut))
+        out.append(min(max(c, 1), n - 1))
+    return out
+
+
+def seq2seq_target_count(examples: list[Example], idx: list[int], seed: int, max_target: int, cut: tuple[float, float]) -> int:
+    return sum(min(len(examples[i].input_ids) - c, max_target) for i, c in zip(idx, seq2seq_cuts(examples, idx, seed, max_target, cut)))
+
+
+def seq2seq_encoder_count(examples: list[Example], idx: list[int], seed: int, max_target: int, cut: tuple[float, float]) -> int:
+    """Encoder tokens eligible for masking (every real token but the first) in a seq2seq micro-batch."""
+    return sum(c - 1 for c in seq2seq_cuts(examples, idx, seed, max_target, cut))
+
+
+def mask_encoder_side(batch: dict[str, torch.Tensor], mask_prob: float, mask_id: int, seed: int) -> dict[str, torch.Tensor]:
+    """Mixed objective for the encoder-decoder: replace a share of the encoder's real tokens (never position 0)
+    with the mask token and add `enc_labels`, the original tokens at masked positions (-100 elsewhere), for
+    an MNTP loss on the encoder's own states (position t predicts enc_labels[t+1]). The decoder reads the
+    masked prefix."""
+    g = torch.Generator().manual_seed(seed)
+    real = batch["enc_mask"].bool().clone()
+    real[:, 0] = False
+    chosen = (torch.rand(real.shape, generator=g) < mask_prob) & real
+    enc_ids = batch["enc_ids"].clone()
+    enc_labels = torch.full_like(enc_ids, -100)
+    enc_labels[chosen] = batch["enc_ids"][chosen]
+    enc_ids[chosen] = mask_id
+    return {**batch, "enc_ids": enc_ids, "enc_labels": enc_labels}
+
+
+def collate_encdec(examples: list[Example], idx: list[int], pad_id: int, start_id: int, seed: int = 0,
+                   seq2seq: bool = False, max_target: int = 2048, cut: tuple[float, float] = (0.25, 0.75)) -> dict[str, torch.Tensor]:
+    """Encoder/decoder batch for E3. Fine-tuning: the prompt goes to the encoder, the target (with its final
+    eos) to the decoder, teacher-forced from `start_id`. seq2seq adaptation: a document is cut at a seeded
+    random point in `cut`; the encoder reads the first part, the decoder predicts up to max_target tokens
+    of the rest. Both sides right-padded; labels -100 at padding."""
+    encs, tgts = [], []
+    cuts = seq2seq_cuts(examples, idx, seed, max_target, cut) if seq2seq else [examples[i].n_prompt for i in idx]
+    for i, c in zip(idx, cuts):
+        ids = examples[i].input_ids
+        encs.append(ids[:c]); tgts.append(ids[c:c + max_target] if seq2seq else ids[c:])
+    ne = max(len(x) for x in encs); nt = max(len(x) for x in tgts)
+    enc_ids = torch.full((len(idx), ne), pad_id, dtype=torch.long); enc_mask = torch.zeros((len(idx), ne), dtype=torch.long)
+    dec_ids = torch.full((len(idx), nt), pad_id, dtype=torch.long); dec_mask = torch.zeros((len(idx), nt), dtype=torch.long)
+    labels = torch.full((len(idx), nt), -100, dtype=torch.long)
+    for r, (en, tg) in enumerate(zip(encs, tgts)):
+        enc_ids[r, :len(en)] = torch.from_numpy(en.astype(np.int64)); enc_mask[r, :len(en)] = 1
+        t = torch.from_numpy(tg.astype(np.int64))
+        dec_ids[r, 0] = start_id; dec_ids[r, 1:len(tg)] = t[:-1]; dec_mask[r, :len(tg)] = 1
+        labels[r, :len(tg)] = t
+    return {"enc_ids": enc_ids, "enc_mask": enc_mask, "dec_ids": dec_ids, "dec_mask": dec_mask, "labels": labels}
 
 
 @dataclass

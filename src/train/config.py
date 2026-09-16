@@ -19,6 +19,14 @@ class DataConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     base: str = "Qwen/Qwen3-1.7B-Base"
+    # encdec: E3 built here, src/train/encdec.py (base may be an EncDec.save dir). hf_encdec: a native Hugging Face
+    # encoder-decoder (T5Gemma 2) run through its own forward; same batches as encdec, DDP, full parameters
+    arch: Literal["decoder", "encdec", "hf_encdec"] = "decoder"
+    lora_r: int = 0  # encdec only: LoRA rank on both towers (0 = full training); cross-attention always trains in full
+    lora_alpha: int = 0  # 0 = 2 * lora_r
+    # fsdp: shard the weights, gradients and 8-bit optimizer state across the GPUs (FSDP2), bf16 compute; any
+    # arch. The only way 3.8B+ parameters train in full on two 32 GB cards; ~35% slower than DDP (weights cross PCIe).
+    sharding: Literal["ddp", "fsdp"] = "ddp"
     attn: Literal["flash_attention_2", "sdpa", "flex_attention"] = "flash_attention_2"
     gradient_checkpointing: bool = True
     # E2 flips this: bidirectional attention over the prompt, causal over the answer
@@ -33,6 +41,10 @@ class OptimConfig(BaseModel):
     betas: tuple[float, float] = (0.9, 0.95)
     grad_clip: float = 1.0
     optimizer: Literal["adamw8bit", "adamw"] = "adamw8bit"
+    # fp32_master: bf16 model, fp32 master copy owned by the optimizer (E1's recipe; ~5 bytes/param/GPU when
+    # sharded). bf16_sr: the bf16 weights are the only copy, updated with stochastic rounding (torchao's 8-bit
+    # AdamW; ~3 bytes/param/GPU sharded): what lets 7.5B parameters train in full on two 32 GB cards. fsdp only.
+    weights: Literal["fp32_master", "bf16_sr"] = "fp32_master"
 
 
 class CorpusSpec(BaseModel):
@@ -48,8 +60,11 @@ class AdaptConfig(BaseModel):
     objective). mntp: masked next-token prediction with bidirectional attention, LLM2Vec-style: a
     share of tokens is replaced by mask_token and each masked token is predicted from the hidden
     state one position before it, loss on masked positions only."""
-    objective: Literal["causal", "mntp"]
+    objective: Literal["causal", "mntp", "seq2seq", "mixed"]  # mixed: seq2seq + MNTP on the encoder (E3)
     mask_prob: float = 0.2
+    mntp_weight: float = 1.0  # mixed: weight of the encoder-side masked loss relative to the seq2seq loss
+    max_target: int = 2048  # seq2seq: decoder side length cap
+    cut: tuple[float, float] = (0.25, 0.75)  # seq2seq: where a document is cut, as a fraction of its length
     mask_token: str = "<|image_pad|>"  # a Qwen3 special token that never occurs in text
     # None: the training transcripts themselves. Otherwise: transcript text from outside the training
     # corpus, one CorpusSpec per interim corpus; documents that are labelled calls are excluded.

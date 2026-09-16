@@ -1,0 +1,24 @@
+# E1 on Gemma 3 270M (pretrained, text only), the decoder T5Gemma 2 270m-270m was adapted from: the control for
+# configs/e3/t5gemma2-270m-270m.yaml. E1's recipe unchanged; context capped at 16k to match its pair.
+experiment: e1
+name: e1-gemma3-270m
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-270m
+  attn: flash_attention_2
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 32768
+val_every: 200
+checkpoint_minutes: 30
+wandb_project: tt-decoder
+tags: [google/gemma-3-270m, full-params, pair-t5gemma2-270m-270m]

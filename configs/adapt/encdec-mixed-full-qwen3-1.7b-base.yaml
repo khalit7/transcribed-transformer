@@ -1,0 +1,40 @@
+# Adaptation stage for E3: the encoder-decoder built from Qwen3-1.7B-Base learns to read through its new
+# cross-attention on the E2++ outside-text sample (seq2seq: encoder reads a document prefix, decoder
+# generates the continuation) PLUS a masked-token loss on the encoder's own states (20% of the prefix masked,
+# E2++'s MNTP objective on the encoder tower), after the seq2seq-only stage barely moved the encoder.
+experiment: e3
+name: adapt-encdec-mixed-full-qwen3-1.7b-base
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 32768
+model:
+  base: Qwen/Qwen3-1.7B-Base
+  arch: encdec
+  sharding: fsdp      # every parameter trains; fp32 masters sharded across the two GPUs
+  attn: flash_attention_2
+  gradient_checkpointing: true
+adapt:
+  objective: mixed
+  mask_prob: 0.2
+  mask_token: "<|image_pad|>"
+  mntp_weight: 1.0
+  max_target: 1024
+  cut: [0.25, 0.75]
+  corpora:
+    - {path: data/interim/callcenteren/train.jsonl, docs: 88933, val_docs: 100}
+    - {path: data/interim/sporc/train.jsonl, docs: 35000, val_docs: 40}
+    - {path: data/interim/meetingbank/train.jsonl, docs: 1218, val_docs: 10}
+    - {path: data/interim/courtlistener/train.jsonl, docs: 6400, val_docs: 10}
+optim:
+  lr: 1.0e-5          # full-parameter rate, as E1
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 12288       # full-parameter sharded training with the mixed objective OOMs at 16k
+val_every: 250
+checkpoint_minutes: 30
+wandb_project: tt-pretrain
+tags: [adapt, corpora, encdec, full-params]

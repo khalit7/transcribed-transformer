@@ -1,0 +1,28 @@
+# Recipe check: configs/e3/t5gemma2-270m-270m.yaml re-run under the sharded bf16 + stochastic-rounding recipe
+# (fsdp, optim.weights: bf16_sr) that the 4B pair needs. Must reproduce the fp32-master run within noise before
+# either 4B arm uses it.
+experiment: e3
+name: e3-t5gemma2-270m-270m-bf16sr
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/t5gemma-2-270m-270m
+  arch: hf_encdec
+  sharding: fsdp
+  attn: sdpa               # transformers has no flash-attention path for T5Gemma 2
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+  weights: bf16_sr
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 200
+checkpoint_minutes: 30
+wandb_project: tt-encdec
+tags: [native, google/t5gemma-2-270m-270m, full-params, bf16-sr, recipe-check]
