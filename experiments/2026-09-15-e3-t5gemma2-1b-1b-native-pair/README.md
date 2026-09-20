@@ -135,6 +135,42 @@ Val split: macro-F1 0.820 / 0.777, evidence F1 0.737 / 0.687. The strongest trai
 
 **Recipe observation, parked.** The stopped check (`checkpoints/e3-t5gemma2-270m-270m-bf16sr-stopped/`, tt-encdec run) is the only measurement of the precision recipe's effect on this task: at lr 1e-5, bf16 weights with stochastic rounding trained faster than bf16 weights with fp32 masters over the first 230 steps of the 270m-270m. Not benchmarked, not explained; a plausible mechanism is that most single updates at this learning rate are below bf16's resolution and reach the weights only once accumulated under the master-copy recipe. Worth a full run at some point; not part of the pair design.
 
+## Parameter-matched decoder controls: Qwen2.5-1.5B and Hunyuan-1.8B (added 2026-09-20, before the runs)
+
+Khalid, after the SmolLM3 run turned out to be an upper bracket rather than a match: "recommend 3-5 models to achieve a parameter-size-matched comparison between the 1B-1B decoder and an encoder using E1's recipe … ready to fine-tune immediately", then "yes do your recommendation". From a sixteen-candidate survey (notes §6) the two ready ones at the 1b-1b's size: **Qwen2.5-1.5B** (1.31B non-embedding against the 1b-1b's 1.40B; same vendor as E1's Qwen3-1.7B, previous generation) and **Hunyuan-1.8B-Pretrain** (1.54B; a third family, 256k native context). Both under E1's recipe unchanged (`configs/e1/qwen2.5-1.5b.yaml`, `configs/e1/hunyuan-1.8b.yaml`), DDP, 16k cap, vLLM evaluation.
+
+- **Prediction.** If the 1b-1b's margin over Qwen3-1.7B (+0.009 / +0.003 macro-F1 overall, +0.023 / −0.010 unseen, +0.016 / +0.020 evidence F1) reflects architecture rather than that one base, both matched decoders land at or below the 1b-1b on evidence F1 on both variants, and at or below it on clean unseen-question macro-F1. **Disconfirmed if** either matched decoder beats the 1b-1b on evidence F1 on both variants by more than 0.01, in which case the 1b-1b's edge over Qwen3-1.7B was specific to that base, and the architecture claim at matched size rests on the same-family Gemma pairs alone.
+- Order: Qwen2.5-1.5B, then Hunyuan-1.8B, each followed by evaluation; Hunyuan gets a three-step smoke first (its RoPE configuration warns under transformers 5).
+- wandb: Qwen2.5-1.5B [tt-decoder/76zoh4qj](https://wandb.ai/khalit7-/tt-decoder/runs/76zoh4qj), started 2026-09-20 11:16 (91,485 examples, 17 dropped above 16k); Hunyuan-1.8B tt-decoder, run id TBD (`checkpoints/e1-hunyuan-1.8b/wandb_id`).
+- **Qwen2.5-1.5B result** (2026-09-20 11:16 → 14:54, 3.6 h, DDP, ~19k tok/s over the pair, 24.7 GiB; vLLM generation 17 min; scored 15:10). Val loss 1.307 → 0.770 (200) → 0.638 (1000) → 0.573 (2000) → 0.553 (2858), against Qwen3-1.7B's 0.503 on a near-identical tokenizer. Benchmark, clean / messy:
+
+| metric | Qwen2.5-1.5B (1.31B non-emb) | T5Gemma 2 1b-1b (1.40B) | Qwen3-1.7B (1.41B) |
+|---|---|---|---|
+| macro-F1 overall | 0.702 / 0.688 | 0.744 / 0.722 | 0.735 / 0.719 |
+| macro-F1 unseen questions | 0.574 / 0.588 | 0.677 / 0.642 | 0.654 / 0.652 |
+| evidence F1 | 0.567 / 0.535 | 0.619 / 0.590 | 0.603 / 0.570 |
+| evidence precision | 0.655 / 0.621 | 0.725 / 0.694 | 0.697 / 0.663 |
+| format valid | 0.971 / 0.960 | 0.990 / 0.985 | 0.985 / 0.979 |
+| messy SPoRC, macro-F1 / evidence F1 | 0.683 / 0.478 | 0.687 / 0.546 | 0.700 / 0.509 |
+| messy 8–16k, macro-F1 / evidence F1 | 0.701 / 0.470 | 0.702 / 0.539 | 0.721 / 0.492 |
+
+Val split: macro-F1 0.736 / 0.714, evidence F1 0.624 / 0.589. The prediction holds for this control: below the 1b-1b on evidence F1 on both variants (−0.052 / −0.055) and on clean unseen-question macro-F1 (−0.103; its clean unseen 0.574 is below the majority predictor's 0.582). It is also below its own successor Qwen3-1.7B on every slice, by 0.03 overall and 0.08 / 0.06 on unseen questions, so the generation gap inside one vendor is as large as the architecture gap.
+- **Hunyuan-1.8B result** ([tt-decoder/vo5d2jcy](https://wandb.ai/khalit7-/tt-decoder/runs/vo5d2jcy); 15:10 → 16:42 to step ~895, aborted by a full disk at a checkpoint write, resumed from step-594 at 16:44 and finished 20:33, 3.83 h after the resume; vLLM in eager mode, since CUDA-graph capture fails on this model's on-demand RoPE cache; scored 21:06). Val loss 1.368 → 0.865 (200) → 0.702 (1000) → 0.616 (2000) → 0.583 (2858), own tokenizer. Benchmark, clean / messy:
+
+| metric | Hunyuan-1.8B (1.54B non-emb) | Qwen2.5-1.5B (1.31B) | T5Gemma 2 1b-1b (1.40B) | Qwen3-1.7B (1.41B) |
+|---|---|---|---|---|
+| macro-F1 overall | 0.729 / 0.711 | 0.702 / 0.688 | 0.744 / 0.722 | 0.735 / 0.719 |
+| macro-F1 unseen questions | 0.623 / 0.624 | 0.574 / 0.588 | 0.677 / 0.642 | 0.654 / 0.652 |
+| evidence F1 | 0.603 / 0.573 | 0.567 / 0.535 | 0.619 / 0.590 | 0.603 / 0.570 |
+| evidence precision | 0.710 / 0.680 | 0.655 / 0.621 | 0.725 / 0.694 | 0.697 / 0.663 |
+| format valid | 0.994 / 0.991 | 0.971 / 0.960 | 0.990 / 0.985 | 0.985 / 0.979 |
+| messy SPoRC, macro-F1 / evidence F1 | 0.709 / 0.524 | 0.683 / 0.478 | 0.687 / 0.546 | 0.700 / 0.509 |
+| messy 8–16k, macro-F1 / evidence F1 | 0.726 / 0.510 | 0.701 / 0.470 | 0.702 / 0.539 | 0.721 / 0.492 |
+
+Val split: macro-F1 0.775 / 0.744, evidence F1 0.671 / 0.634. Hunyuan is the second-best matched decoder, between Qwen2.5 and Qwen3: it matches Qwen3-1.7B on evidence F1 and format, trails it on answers by 0.006 / 0.008 overall and 0.03 on unseen questions. Against the 1b-1b it is below on evidence F1 on both variants (−0.016 / −0.017), on clean unseen-question macro-F1 (−0.054) and on every other headline number except long-prompt answers under the messy variant (0.726 vs 0.702) and SPoRC answers (0.709 vs 0.687).
+
+**Verdict on the matched controls: the prediction holds.** Three cross-family decoders at 1.3–1.5B non-embedding parameters (Qwen2.5, Qwen3, Hunyuan) all land at or below the 1b-1b on evidence F1 on both variants and on clean unseen-question macro-F1, and the 1b-1b is above every one of them on overall macro-F1 on both variants. The spread among the three decoders (0.702–0.735 clean) is as wide as the 1b-1b's margin over the best of them (+0.009), so the answer-side edge is small and base-dependent; the evidence-side edge (+0.016 to +0.052 F1, +0.028 to +0.070 precision) and the unseen-question edge on the clean variant (+0.023 to +0.103) hold against all three. Not separated: architecture from Google's 2T-token adaptation; and every decoder here had 2.5× to 1× more pretraining-adjacent training than each other, unmeasured.
+
 ## Follow-ups
 
 - **SmolLM3 3B cross-family control (2026-09-19).** [Pre-run hypothesis and setup](../2026-09-19-e1-smollm3-3b-base/README.md): an additional E1 baseline under the same precision recipe and 16k cap, testing practical competitiveness rather than architecture alone.

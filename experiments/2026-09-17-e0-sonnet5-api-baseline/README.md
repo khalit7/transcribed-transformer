@@ -24,7 +24,7 @@ The README's E0 row: a frontier model behind an API, given the same prompt and t
 
 ## Result
 
-TBD.
+In progress, paused. Run history: 8 workers from 00:53 on 2026-09-17, cut to 2 workers at 10:13 at Khalid's request after the second subscription-limit window; the machine rebooted on 2026-09-19 with 24,298 of 38,220 requests done; relaunched 2026-09-20 10:47 and stopped at 10:52 at Khalid's request ("stop E0 for now") at 24,330 done. Resumed 2026-09-20 with one worker (10:47, personal account), killed by a full disk at 16:42 (one truncated record dropped), resumed 17:20 and stopped at 17:35 at Khalid's request, then resumed at 17:36 on the **work** subscription account for the remainder (Khalid: "Use claude work for E0. Use one worker"). Account boundary: records 1–26,373 of `gen.jsonl` (in file order) were billed to the personal account, the rest to the work account; the per-record fields do not carry the account. Every completed request is on disk; a relaunch resumes from there. Limit windows on the personal account: about thirty, the longest 202 minutes. Numbers: TBD until the run completes.
 
 ## Verdict
 

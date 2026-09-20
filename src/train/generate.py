@@ -48,6 +48,8 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--backend", choices=["vllm", "hf", "prefixlm", "encdec", "hf_encdec"], default="vllm")
     ap.add_argument("--batch", type=int, default=16, help="prefixlm backend: sequences per batch")
+    ap.add_argument("--enforce-eager", action="store_true",
+                    help="vllm backend: no CUDA graphs (a model whose RoPE cache grows on demand, e.g. Hunyuan's dynamic NTK, cannot be captured)")
     args = ap.parse_args()
     pairs = load_pairs(args.split, args.variants.split(","), args.limit)
     done = set()
@@ -64,7 +66,8 @@ def main() -> None:
         os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
         from vllm import LLM, SamplingParams  # type: ignore[import-not-found]
         llm = LLM(model=args.model_dir, dtype="bfloat16", max_model_len=args.max_model_len,
-                  tensor_parallel_size=args.tp, gpu_memory_utilization=0.9, enable_prefix_caching=True)
+                  tensor_parallel_size=args.tp, gpu_memory_utilization=0.9, enable_prefix_caching=True,
+                  enforce_eager=args.enforce_eager)
         sp = SamplingParams(temperature=0.0, max_tokens=args.max_tokens)
         with args.out.open("a") as f:
             for i in range(0, len(pairs), 2048):

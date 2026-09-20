@@ -1,0 +1,25 @@
+# E1 recipe on Hunyuan-1.8B-Pretrain (base): a parameter-matched decoder control for the native T5Gemma 2 1b-1b
+# (1.54B non-embedding parameters against the 1b-1b's 1.40B; a third model family, 256k native context).
+# E1's recipe unchanged; 16k cap as in the Gemma pairs. Surveyed 2026-09-20 (notes §6).
+experiment: e1
+name: e1-hunyuan-1.8b
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: tencent/Hunyuan-1.8B-Pretrain
+  attn: flash_attention_2
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 32768
+val_every: 200
+checkpoint_minutes: 30
+wandb_project: tt-decoder
+tags: [tencent/Hunyuan-1.8B-Pretrain, 1.8B, full-params, matched-control-t5gemma2-1b-1b]
