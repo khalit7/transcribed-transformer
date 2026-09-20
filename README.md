@@ -2,7 +2,7 @@
 
 Research towards models that answer compliance questions over collections of ASR call transcripts, and a measurement of how much architecture and pretraining distribution matter for that task.
 
-> **Status: early.** The design is settled, the implementation is not. No results yet. Every number in this README is `TBD` until it comes from a run, and will stay that way rather than being filled in with an estimate.
+> **Status (2026-09-19): experiments are implemented and benchmark results are recorded in [`experiments/`](experiments/).** The API baseline is incomplete and the larger native encoder-decoder comparison is pending. The design below includes the original plans; unmeasured results remain `TBD`.
 
 ## TLDR — context and motivation
 

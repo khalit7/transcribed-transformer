@@ -5,6 +5,7 @@ description = "Compliance QA over ASR call transcripts: decoder vs encoder-decod
 requires-python = ">=3.11"
 dependencies = [
     "accelerate>=1.15.0",
+    "anthropic>=1.6.0",
     "bitsandbytes>=0.50",
     "duckdb>=1.5.5",
     "faster-whisper>=1.2.1",

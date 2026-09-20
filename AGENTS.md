@@ -2,6 +2,12 @@
 
 Working agreement for this repository. Read this before making changes.
 
+## Continuing an existing session
+
+Read `README.md`, then `notes.md` if present, followed by the relevant experiment record and implementation docs. The notes are the local research history: later dated decisions supersede earlier ones. Read `CLAUDE.local.md` for their maintenance conventions. The owner explicitly permits private material in gitignored `notes.md` (reaffirmed 2026-09-19); mark it `[PRIVATE]` and never commit or publish the file as-is. This is a specific exception to the working-tree confidentiality rule below, not permission to copy private material into other repository files.
+
+Before acting, check the working tree and current run state; preserve existing edits. After material work, update the notes and relevant experiment record (results, decisions, failures, deferred ideas and session log). Use these existing records for continuity rather than creating a separate handover file. Keep this working agreement synchronised across `AGENTS.md` and `CLAUDE.md`.
+
 ## What this project is
 
 Research towards models that answer compliance questions over collections of ASR call transcripts, comparing a prompted **API model** baseline with trained arms built from one model family: a causal **decoder**, a **prefix-LM** decoder (bidirectional attention over the transcript), an **encoder-decoder**, and two frozen-encoder designs (the table in `README.md`, "Design").
@@ -94,7 +100,7 @@ Every training and evaluation run logs to Weights & Biases. There is no second l
 - **Always logged**: loss, learning rate, grad norm, tokens seen, throughput (tokens/s and MFU), per-GPU memory.
 - **Evaluation logs to the same run id** as the training job that produced the checkpoint. A checkpoint's quality and its training curve are never separated.
 - **Artefacts** (tokenizer, ASR channel-model parameters, benchmark version) versioned as wandb artifacts, so any result traces back to the exact data that produced it.
-- `WANDB_API_KEY` comes from the environment and is never committed. Long unattended runs use `WANDB_MODE=offline` and sync afterwards.
+- `WANDB_API_KEY` comes from the environment and is never committed. Runs use `WANDB_MODE=online` so losses appear live, including unattended runs (owner reaffirmed 2026-09-19). Use offline mode only when explicitly requested; this supersedes the older offline recommendation in the train-run skill.
 
 Alongside wandb, each run gets a directory in `experiments/` recording hypothesis, config, result and verdict, cross-linked to the wandb run id. Use the `log-experiment` skill. wandb holds the metrics; `experiments/` holds the reasoning.
 

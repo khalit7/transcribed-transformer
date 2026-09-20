@@ -1,7 +1,6 @@
 # E1 on Gemma 3 4B (pretrained, multimodal checkpoint; the image tower is frozen and never called), the decoder
-# T5Gemma 2 4b-4b was adapted from: the control for configs/e3/t5gemma2-4b-4b.yaml. E1's recipe, except that both
-# 4B arms train under the sharded bf16 + stochastic-rounding recipe (the 4b-4b's 7.5B parameters leave no room for
-# fp32 masters); validated on the 270m-270m first. 16k cap as in the other pairs.
+# T5Gemma 2 4b-4b was adapted from: the control for configs/e3/t5gemma2-4b-4b.yaml. E1's recipe unchanged (fp32
+# master weights, sharded across the two GPUs as the Qwen-built E3 was). 16k cap as in the other pairs.
 experiment: e1
 name: e1-gemma3-4b-pt
 seed: 0
@@ -18,11 +17,10 @@ optim:
   warmup_steps: 50
   weight_decay: 0.1
   optimizer: adamw8bit
-  weights: bf16_sr
 epochs: 1
 batch_sequences: 32
 micro_tokens: 16384
 val_every: 200
 checkpoint_minutes: 30
 wandb_project: tt-decoder
-tags: [google/gemma-3-4b-pt, full-params, bf16-sr, pair-t5gemma2-4b-4b]
+tags: [google/gemma-3-4b-pt, full-params, pair-t5gemma2-4b-4b]

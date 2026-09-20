@@ -108,8 +108,36 @@ Khalid: "I would like to run the decoder only version of all models that have an
 
 The 270M decoder collapses under greedy decoding: 35.9% of its benchmark outputs are runaway evidence lists that count line numbers upward until the 512-token cap (13,714 of 38,220), and the rest is scored as is. Overall macro-F1 is below the majority predictor (0.446 vs 0.592). The prediction ("answers close, evidence advantage of at least 0.03, both below majority on unseen") is confirmed on the evidence and format half and exceeded on answers: the encoder-decoder is ahead by 0.21 macro-F1 and 0.28 evidence F1, and it is the only one of the two above chance overall. The runaway share of the other decoders for reference: Gemma 3 1B about 4.5% invalid, E1 1.4%.
 
+## The large pair: Gemma 3 4B and T5Gemma 2 4b-4b (added 2026-09-17 00:15; revised 00:30)
+
+Khalid: "I would like to prove this on a bigger scale", full-parameter. The 4b-4b's 7.5B parameters do not fit E1's recipe (fp32 master weights) on two 32 GB cards: about 37 GB per GPU sharded. The first plan put both 4B arms on a bf16 + stochastic-rounding recipe (`optim.weights: bf16_sr`) and re-ran the 270m-270m under it as a check. That check, stopped at step 230, showed the recipes are **not** equivalent: val loss 0.922 at step 200 against 1.015 under fp32 masters (identical 2.026 at step 0), training loss lower from step 50 on. **Decision (Khalid, 00:25): every run stays on E1's recipe; the 4b-4b goes to rented hardware** (two 80 GB or four 48 GB cards) under the same recipe. Gemma 3 4B runs locally under E1's recipe, sharded as the Qwen-built E3 was.
+
+- **Prediction (unchanged).** The 1B and 270M pairs give +0.09 and +0.21 macro-F1 for the encoder-decoder. If the trend is real, 4b-4b beats Gemma 3 4B by at least +0.03 macro-F1 overall on both variants and leads on evidence F1; the margin is expected to shrink with size. **Disconfirmed if** Gemma 3 4B matches or beats the 4b-4b on unseen-question macro-F1 on both variants: the encoder-decoder's advantage would then be a small-model effect that a large enough decoder closes.
+- Probe, Gemma 3 4B under E1's recipe sharded (both GPUs, one 16k sequence, 160-token target): 24.4 GiB, 4.6k tokens/s per GPU (3.88B trainable, image tower frozen, FlashAttention 2). The bf16_sr probe numbers, for the record: 17.6 GiB / 4.7k tok/s (Gemma 3 4B), 27.5 GiB / 1.5k tok/s (4b-4b).
+- Configs `configs/e1/gemma3-4b-pt.yaml` (running), `configs/e3/t5gemma2-4b-4b.yaml` (annotated for rented hardware); 16k cap as in the other pairs.
+- wandb: Gemma 3 4B [tt-decoder/xgv48ne6](https://wandb.ai/khalit7-/tt-decoder/runs/xgv48ne6), 2026-09-17 00:29 → 11:08 (10.65 h; vLLM generation 17 min; scored 11:35 after two failed launches, see below). 4b-4b TBD (rented hardware).
+- **Gemma 3 4B result.** Val loss 1.265 (0) → 0.635 (200) → 0.523 (1000) → 0.454 (2000) → 0.427 (2858): the lowest final loss of any run (1b-1b 0.529, E1 0.503 on Qwen's tokenizer, 1B decoder 0.632). Benchmark, clean / messy, with the 1b-1b (the encoder-decoder it brackets from above at 3.9B vs 2.1B parameters) and E1:
+
+| metric | Gemma 3 4B | T5Gemma 2 1b-1b | E1 Qwen3-1.7B |
+|---|---|---|---|
+| macro-F1 overall | 0.778 / 0.745 | 0.744 / 0.722 | 0.735 / 0.719 |
+| macro-F1 unseen questions | 0.702 / 0.684 | 0.677 / 0.642 | 0.654 / 0.652 |
+| evidence F1 | 0.635 / 0.604 | 0.619 / 0.590 | 0.603 / 0.570 |
+| evidence precision | 0.743 / 0.713 | 0.725 / 0.694 | 0.697 / 0.663 |
+| format valid | 0.992 / 0.988 | 0.990 / 0.985 | 0.985 / 0.979 |
+| messy SPoRC, macro-F1 / evidence F1 | 0.731 / 0.554 | 0.687 / 0.546 | 0.700 / 0.509 |
+| messy 8–16k, macro-F1 / evidence F1 | 0.739 / 0.548 | 0.702 / 0.539 | 0.721 / 0.492 |
+
+Val split: macro-F1 0.820 / 0.777, evidence F1 0.737 / 0.687. The strongest trained model on the benchmark so far, on every slice.
+
+- **Reading as the inference-matched control.** A 3.9B decoder beats the 2.1B encoder-decoder by 0.034 / 0.023 macro-F1 overall and 0.025 / 0.042 on unseen questions, with evidence F1 +0.016 / +0.014. The encoder-decoder gets within that margin while reading each prompt token through 0.7B parameters against the decoder's 3.9B, about a fifth of the compute per prompt token. Whether the 4b-4b (7.5B, 3.9B per prompt token) beats Gemma 3 4B is the pair question, still open.
+- Two evaluation launches failed on the export before this number: the multimodal class needs the image-processor files, and the streamed export had written tensors under module names where vLLM reads the on-disk convention. The export now goes through `save_pretrained` on a CPU copy plus a rename of the frozen image tower; the model itself was unaffected.
+
+**Recipe observation, parked.** The stopped check (`checkpoints/e3-t5gemma2-270m-270m-bf16sr-stopped/`, tt-encdec run) is the only measurement of the precision recipe's effect on this task: at lr 1e-5, bf16 weights with stochastic rounding trained faster than bf16 weights with fp32 masters over the first 230 steps of the 270m-270m. Not benchmarked, not explained; a plausible mechanism is that most single updates at this learning rate are below bf16's resolution and reach the weights only once accumulated under the master-copy recipe. Worth a full run at some point; not part of the pair design.
+
 ## Follow-ups
 
+- **SmolLM3 3B cross-family control (2026-09-19).** [Pre-run hypothesis and setup](../2026-09-19-e1-smollm3-3b-base/README.md): an additional E1 baseline under the same precision recipe and 16k cap, testing practical competitiveness rather than architecture alone.
 - **Inference-matched decoder control.** The README asks for the encoder-decoder to be reported against both the parameter-matched and the inference-matched decoder. Gemma 3 4B pretrained under the E1 recipe brackets T5Gemma 2 1b-1b from above (4B against 2.1B); if the 1b-1b still wins or ties, the architecture claim strengthens. Full-parameter training of 4B needs the FSDP path generalised from `EncDec` to a plain decoder (or LoRA on both arms, which is a further confound).
 - **T5Gemma 2 4b-4b** is the scale point (8.6B parameters, FSDP required, ~2× the time); worth it only after the 4B decoder control exists.
 - **E0** (the API baseline) is now the missing column: the strongest trained model needs to be placed against it.
