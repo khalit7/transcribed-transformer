@@ -129,6 +129,41 @@ def load_model(cfg: TrainConfig, device: torch.device):
     return tok, model.to(device), attn  # type: ignore[arg-type]
 
 
+def export_hf(inner, sd: dict[str, torch.Tensor], final: Path) -> None:
+    """Write a gathered state dict (module parameter names, bf16, CPU) as a Hugging Face checkpoint through the
+    library's own save_pretrained, so the on-disk tensor names follow its conventions (they differ from the
+    module names for multimodal classes such as Gemma 3 4B, and vLLM reads the on-disk names). A second copy
+    of the model is built on the CPU from the config: 8.6 GB at 4B."""
+    from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM
+    auto = AutoModelForSeq2SeqLM if getattr(inner.config, "is_encoder_decoder", False) else AutoModelForCausalLM
+    with torch.device("cpu"):
+        cpu = auto.from_config(inner.config, dtype=torch.bfloat16)
+    missing, unexpected = cpu.load_state_dict(sd, strict=False)
+    cpu.tie_weights()
+    tied = getattr(cpu.config.get_text_config(), "tie_word_embeddings", False)  # a tied head is absent from named_parameters
+    missing = [k for k in missing if not (tied and k.endswith("lm_head.weight"))]
+    if missing or unexpected:
+        raise SystemExit(f"export: state dict mismatch, missing {missing[:5]}, unexpected {unexpected[:5]}")
+    cpu.save_pretrained(final, safe_serialization=True)
+    if getattr(inner, "generation_config", None) is not None:
+        inner.generation_config.save_pretrained(final)
+    del cpu
+    # transformers 5 writes a multimodal checkpoint's image tower as `vision_tower.<x>`; the original Gemma 3 files (and
+    # vLLM 0.29, which reads them) use `vision_tower.vision_model.<x>`. The tower is frozen, so only the names change.
+    from safetensors.torch import load_file, save_file
+    for shard in sorted(final.glob("model*.safetensors")):
+        sd_ = load_file(str(shard))
+        ren = {k: k.replace("vision_tower.", "vision_tower.vision_model.", 1) for k in sd_ if k.startswith("vision_tower.") and not k.startswith("vision_tower.vision_model.")}
+        if ren:
+            save_file({ren.get(k, k): v for k, v in sd_.items()}, str(shard), metadata={"format": "pt"})
+    idx = final / "model.safetensors.index.json"
+    if idx.exists():
+        d = json.loads(idx.read_text())
+        d["weight_map"] = {(k.replace("vision_tower.", "vision_tower.vision_model.", 1) if k.startswith("vision_tower.") and not k.startswith("vision_tower.vision_model.") else k): v
+                           for k, v in d["weight_map"].items()}
+        idx.write_text(json.dumps(d, indent=1))
+
+
 def prepare_for_sharding(model, cfg: TrainConfig, device: torch.device):
     """The weights as the optimizer will own them, on the device before sharding: fp32 under the master-copy
     recipe, bf16 under stochastic rounding."""
@@ -195,6 +230,14 @@ def shard_encdec(model: EncDec) -> EncDec:
 
 def is_sharded(model) -> bool:
     return any(type(p).__name__ == "DTensor" for p in model.parameters())
+
+
+def reshard(model) -> None:
+    """Put every FSDP2 unit back into its sharded state. The root unit stays unsharded after a forward with no
+    backward (validation), so its parameters read as plain tensors until something reshards them."""
+    for m in model.modules():
+        if hasattr(m, "reshard") and hasattr(m, "unshard"):
+            m.reshard()
 
 
 def target_loss(model, batch: dict, device: torch.device, prefix_lm: str | None = None,
@@ -431,6 +474,7 @@ def save_checkpoint(path: Path, model, opt, step: int, epoch: int, cfg: TrainCon
     if rank == 0:
         (tmp / "state.json").write_text(json.dumps({"step": step, "epoch": epoch, "world": world, "config": cfg.model_dump(mode="json")}))
     if is_sharded(model):  # each rank writes its own shards: no gather, no full copy in system memory (30 GB at 7.5B)
+        reshard(model)
         plain = [n for n, p in model.named_parameters() if p.requires_grad and type(p).__name__ != "DTensor"]
         if plain:
             raise SystemExit(f"trainable parameters outside any FSDP unit (their gradients would never be reduced): {plain[:8]}")
@@ -725,6 +769,7 @@ def main() -> None:
     if not args.smoke and is_sharded(model):
         # gather parameter by parameter (collective), rank 0 keeps a bf16 CPU copy: 15 GB at 7.5B, on one rank only
         sd: dict[str, torch.Tensor] = {}
+        reshard(model)
         for n, p in model.named_parameters():
             t = p.full_tensor() if type(p).__name__ == "DTensor" else p
             if rank == 0:
@@ -738,12 +783,8 @@ def main() -> None:
                 base = cfg.model.base if not EncDec.is_encdec_dir(cfg.model.base) else json.loads((Path(cfg.model.base) / "encdec.json").read_text())["base"]
                 (final / "encdec.json").write_text(json.dumps({"base": base, "attn": attn, "lora_r": 0, "lora_alpha": 0}))
             else:
-                from safetensors.torch import save_file
                 inner = model.hf if isinstance(model, ShardedHF) else model
-                inner.config.save_pretrained(final)
-                if getattr(inner, "generation_config", None) is not None:
-                    inner.generation_config.save_pretrained(final)
-                save_file(sd, str(final / "model.safetensors"), metadata={"format": "pt"})
+                export_hf(inner, sd, final)
             tok.save_pretrained(final)
             (final / "train_config.json").write_text(json.dumps(cfg.model_dump(mode="json"), indent=1))
             log(f"final bf16 model -> {final} ({(time.time() - t_start) / 3600:.2f} h)")

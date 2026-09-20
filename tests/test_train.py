@@ -151,3 +151,16 @@ def test_shard_units_lists_blocks_and_keeps_towers_whole():
     model.vision_tower = tower
     blocks, towers = shard_units(model)
     assert len(blocks) == 3 and towers == [tower]
+
+
+def test_api_baseline_request_caches_the_transcript_block():
+    """The transcript-bearing prefix is the cached block; the question follows uncached; cost uses batch prices."""
+    from src.train.api_baseline import SPLIT_MARK, cost_usd, request_params
+    prompt = "instructions\n\nTRANSCRIPT\n1: A: hi\n" + SPLIT_MARK + "was it polite?\nAnswer options..."
+    p = request_params(prompt, "claude-sonnet-5", cache=True)
+    blocks = p["messages"][0]["content"]
+    assert len(blocks) == 2 and blocks[0]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in blocks[1]
+    assert blocks[0]["text"] + blocks[1]["text"] == prompt and blocks[1]["text"].startswith(SPLIT_MARK)
+    assert p["temperature"] == 0.0 and p["max_tokens"] == 512
+    usage = {"input_tokens": 1_000_000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 1_000_000, "output_tokens": 100_000}
+    assert abs(cost_usd("claude-sonnet-5", usage) - 0.5 * (2.0 + 0.2 + 1.0)) < 1e-9
