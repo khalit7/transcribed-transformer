@@ -342,25 +342,37 @@ def mask_encoder_side(batch: dict[str, torch.Tensor], mask_prob: float, mask_id:
 
 
 def collate_encdec(examples: list[Example], idx: list[int], pad_id: int, start_id: int, seed: int = 0,
-                   seq2seq: bool = False, max_target: int = 2048, cut: tuple[float, float] = (0.25, 0.75)) -> dict[str, torch.Tensor]:
+                   seq2seq: bool = False, max_target: int = 2048, cut: tuple[float, float] = (0.25, 0.75),
+                   dec_prompt: bool = False, dec_start: bool = True) -> dict[str, torch.Tensor]:
     """Encoder/decoder batch for E3. Fine-tuning: the prompt goes to the encoder, the target (with its final
     eos) to the decoder, teacher-forced from `start_id`. seq2seq adaptation: a document is cut at a seeded
     random point in `cut`; the encoder reads the first part, the decoder predicts up to max_target tokens
-    of the rest. Both sides right-padded; labels -100 at padding."""
-    encs, tgts = [], []
+    of the rest. Both sides right-padded; labels -100 at padding. dec_prompt (E3h): the decoder side is
+    `start_id`, the prompt, then the target, with labels only on the target, so the decoder reads the raw
+    prompt through self-attention as well as the encoder's states through cross-attention. dec_start=False
+    (E4b, a decoder-only model whose prompt already opens with its start token): no `start_id` is prepended, so
+    the decoder side is the prompt then the target, exactly the decoder's own fine-tuning input."""
+    encs, tgts, prefixes = [], [], []
+    off = 1 if dec_start else 0
     cuts = seq2seq_cuts(examples, idx, seed, max_target, cut) if seq2seq else [examples[i].n_prompt for i in idx]
     for i, c in zip(idx, cuts):
         ids = examples[i].input_ids
         encs.append(ids[:c]); tgts.append(ids[c:c + max_target] if seq2seq else ids[c:])
-    ne = max(len(x) for x in encs); nt = max(len(x) for x in tgts)
+        prefixes.append(ids[:c] if dec_prompt and not seq2seq else ids[:0])
+    ne = max(len(x) for x in encs); nt = max(off + len(p) + len(x) - 1 for p, x in zip(prefixes, tgts))
     enc_ids = torch.full((len(idx), ne), pad_id, dtype=torch.long); enc_mask = torch.zeros((len(idx), ne), dtype=torch.long)
     dec_ids = torch.full((len(idx), nt), pad_id, dtype=torch.long); dec_mask = torch.zeros((len(idx), nt), dtype=torch.long)
     labels = torch.full((len(idx), nt), -100, dtype=torch.long)
-    for r, (en, tg) in enumerate(zip(encs, tgts)):
+    for r, (en, pre, tg) in enumerate(zip(encs, prefixes, tgts)):
         enc_ids[r, :len(en)] = torch.from_numpy(en.astype(np.int64)); enc_mask[r, :len(en)] = 1
         t = torch.from_numpy(tg.astype(np.int64))
-        dec_ids[r, 0] = start_id; dec_ids[r, 1:len(tg)] = t[:-1]; dec_mask[r, :len(tg)] = 1
-        labels[r, :len(tg)] = t
+        k = len(pre)
+        if off:
+            dec_ids[r, 0] = start_id
+        if k:
+            dec_ids[r, off:off + k] = torch.from_numpy(pre.astype(np.int64))
+        dec_ids[r, off + k:off + k + len(tg) - 1] = t[:-1]; dec_mask[r, :off + k + len(tg) - 1] = 1
+        labels[r, off + k - 1:off + k - 1 + len(tg)] = t  # the last prompt token (or start_id) predicts the first target token
     return {"enc_ids": enc_ids, "enc_mask": enc_mask, "dec_ids": dec_ids, "dec_mask": dec_mask, "labels": labels}
 
 

@@ -46,7 +46,7 @@ def main() -> None:
     ap.add_argument("--max-model-len", type=int, default=32768)
     ap.add_argument("--tp", type=int, default=1)
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--backend", choices=["vllm", "hf", "prefixlm", "encdec", "hf_encdec"], default="vllm")
+    ap.add_argument("--backend", choices=["vllm", "hf", "prefixlm", "encdec", "hf_encdec", "hf_encdec_hybrid", "hybrid", "stitched"], default="vllm")
     ap.add_argument("--batch", type=int, default=16, help="prefixlm backend: sequences per batch")
     ap.add_argument("--enforce-eager", action="store_true",
                     help="vllm backend: no CUDA graphs (a model whose RoPE cache grows on demand, e.g. Hunyuan's dynamic NTK, cannot be captured)")
@@ -87,6 +87,15 @@ def main() -> None:
     elif args.backend == "hf_encdec":
         with args.out.open("a") as f:
             generate_hf_encdec(args.model_dir, pairs, f, args.max_tokens, args.batch)
+    elif args.backend == "hf_encdec_hybrid":
+        with args.out.open("a") as f:
+            generate_hf_encdec_hybrid(args.model_dir, pairs, f, args.max_tokens, args.batch)
+    elif args.backend == "hybrid":
+        with args.out.open("a") as f:
+            generate_hybrid(args.model_dir, pairs, f, args.max_tokens, args.batch)
+    elif args.backend == "stitched":
+        with args.out.open("a") as f:
+            generate_stitched(args.model_dir, pairs, f, args.max_tokens, args.batch)
     else:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -295,6 +304,223 @@ def generate_hf_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, m
         for r, i in enumerate(idx):
             toks = []
             for t in gen[r, 1:].tolist():  # the row opens with the decoder start token
+                if t == eos:
+                    break
+                toks.append(t)
+            id_, v, _ = pairs[i]
+            out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+        out.flush()
+        if n_batches % 50 == 1:
+            print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
+
+
+def generate_hf_encdec_hybrid(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 16) -> None:
+    """Greedy decoding for E3h: the encoder reads the prompt; the decoder is prefilled with start token +
+    prompt (left-padded within a length-sorted batch, so padding is a few tokens; explicit position ids start
+    at 0 on the first real token) with cross-attention to the encoder states, then decodes the label."""
+    import torch
+    from transformers import (
+        AutoModelForSeq2SeqLM,
+        AutoTokenizer,
+        DynamicCache,
+        EncoderDecoderCache,
+    )
+
+    tok = AutoTokenizer.from_pretrained(model_dir)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_dir, dtype=torch.bfloat16, attn_implementation="sdpa").cuda().eval()
+    dec_cfg = model.config.get_text_config(decoder=True)
+    eos = tok.eos_token_id
+    pad = tok.pad_token_id if tok.pad_token_id is not None else eos
+    start = tok.bos_token_id if tok.bos_token_id is not None else eos
+    enc_all = tok([p for _, _, p in pairs])["input_ids"]
+    order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
+    t0 = time.time()
+    bi = 0
+    n_batches = 0
+    while bi < len(order):
+        longest = len(enc_all[order[min(bi + batch, len(order)) - 1]])
+        bs = max(1, min(batch, 80_000 // (longest + 1)))
+        idx = order[bi:bi + bs]
+        bi += bs
+        n_batches += 1
+        seqs = [enc_all[i] for i in idx]
+        n = max(len(s) for s in seqs)
+        enc_ids = torch.full((len(seqs), n), pad, dtype=torch.long); enc_mask = torch.zeros((len(seqs), n), dtype=torch.long)
+        m = n + 1  # decoder prefix: start token + prompt, left-padded
+        dec_ids = torch.full((len(seqs), m), pad, dtype=torch.long); dec_mask = torch.zeros((len(seqs), m), dtype=torch.long)
+        pos = torch.zeros((len(seqs), m), dtype=torch.long)
+        for r, s in enumerate(seqs):
+            enc_ids[r, :len(s)] = torch.tensor(s); enc_mask[r, :len(s)] = 1
+            k = m - (len(s) + 1)
+            dec_ids[r, k] = start; dec_ids[r, k + 1:] = torch.tensor(s); dec_mask[r, k:] = 1
+            pos[r, k:] = torch.arange(len(s) + 1)
+        enc_ids, enc_mask, dec_ids, dec_mask, pos = (x.cuda() for x in (enc_ids, enc_mask, dec_ids, dec_mask, pos))
+        with torch.no_grad():
+            enc = model.model.encoder(input_ids=enc_ids, attention_mask=enc_mask, return_dict=True).last_hidden_state
+            cache = EncoderDecoderCache(DynamicCache(config=dec_cfg), DynamicCache())
+            h = model.model.decoder(input_ids=dec_ids, attention_mask=dec_mask, position_ids=pos, past_key_values=cache,
+                                    encoder_hidden_states=enc, encoder_attention_mask=enc_mask, use_cache=True, return_dict=True).last_hidden_state
+            nxt = model.lm_head(h[:, -1]).argmax(-1)
+            done = torch.zeros(len(seqs), dtype=torch.bool, device="cuda")
+            gen = []
+            next_pos = pos[:, -1] + 1
+            for _ in range(max_tokens):
+                nxt = torch.where(done, torch.full_like(nxt, pad), nxt)
+                gen.append(nxt)
+                done = done | (nxt == eos)
+                if bool(done.all()):
+                    break
+                dec_mask = torch.cat([dec_mask, torch.ones((len(seqs), 1), dtype=torch.long, device="cuda")], 1)
+                h = model.model.decoder(input_ids=nxt[:, None], attention_mask=dec_mask, position_ids=next_pos[:, None], past_key_values=cache,
+                                        encoder_hidden_states=enc, encoder_attention_mask=enc_mask, use_cache=True, return_dict=True).last_hidden_state
+                nxt = model.lm_head(h[:, -1]).argmax(-1)
+                next_pos = next_pos + 1
+        gen_t = torch.stack(gen, 1).tolist()
+        for r, i in enumerate(idx):
+            toks = []
+            for t in gen_t[r]:
+                if t == eos:
+                    break
+                toks.append(t)
+            id_, v, _ = pairs[i]
+            out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+        out.flush()
+        if n_batches % 50 == 1:
+            print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
+
+
+def generate_hybrid(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 16) -> None:
+    """Greedy decoding for E4b (src/train/hybrid.py): the encoder reads the prompt once and its keys and values
+    are cached per layer; the decoder is prefilled with the prompt (its own start token in front, as the prompt
+    is tokenised; left-padded within a length-sorted batch; explicit position ids from 0 on the first real
+    token) and decodes the label with a growing cache, reading the encoder through cross-attention."""
+    import torch
+    from transformers import AutoTokenizer, DynamicCache
+
+    from src.train.hybrid import Hybrid, flash_varlen_available
+
+    tok = AutoTokenizer.from_pretrained(model_dir)
+    attn = "flash_attention_2" if flash_varlen_available(torch.zeros(1, device="cuda", dtype=torch.bfloat16)) else "sdpa"
+    model = Hybrid.load(model_dir, attn=attn, gradient_checkpointing=False).cuda().eval()
+    eos = tok.eos_token_id
+    pad = tok.pad_token_id if tok.pad_token_id is not None else eos
+    enc_all = tok([p for _, _, p in pairs])["input_ids"]  # opens with the tokenizer's start token, as in training
+    order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
+    t0 = time.time()
+    bi = 0
+    n_batches = 0
+    while bi < len(order):
+        longest = len(enc_all[order[min(bi + batch, len(order)) - 1]])
+        bs = max(1, min(batch, 40_000 // (longest + 1)))
+        idx = order[bi:bi + bs]
+        bi += bs
+        n_batches += 1
+        seqs = [enc_all[i] for i in idx]
+        n = max(len(s) for s in seqs)
+        enc_ids = torch.full((len(seqs), n), pad, dtype=torch.long); enc_mask = torch.zeros((len(seqs), n), dtype=torch.long)
+        dec_ids = torch.full((len(seqs), n), pad, dtype=torch.long); dec_mask = torch.zeros((len(seqs), n), dtype=torch.long)
+        pos = torch.zeros((len(seqs), n), dtype=torch.long)
+        for r, s in enumerate(seqs):
+            enc_ids[r, :len(s)] = torch.tensor(s); enc_mask[r, :len(s)] = 1
+            k = n - len(s)
+            dec_ids[r, k:] = torch.tensor(s); dec_mask[r, k:] = 1
+            pos[r, k:] = torch.arange(len(s))
+        enc_ids, enc_mask, dec_ids, dec_mask, pos = (x.cuda() for x in (enc_ids, enc_mask, dec_ids, dec_mask, pos))
+        with torch.no_grad():
+            enc = model.encode(enc_ids, enc_mask)
+            # prefill: the prompt's queries over the encoder's keys through the varlen kernel (SDPA with a key mask
+            # materialises the 16k × 16k matrix per layer, 2 GiB, which is where the first run died); decoding
+            # steps: one query per step over cached keys and values, cheap under SDPA
+            model.set_context(enc, enc_mask, cache_kv=False, dec_mask=dec_mask)
+            cache = DynamicCache(config=model.config)
+            h = model.decode(dec_ids, dec_mask, pos, cache)
+            model.set_context(enc, enc_mask, cache_kv=True)
+            nxt = model.lm_head(h[:, -1]).argmax(-1)
+            done = torch.zeros(len(seqs), dtype=torch.bool, device="cuda")
+            gen = []
+            next_pos = pos[:, -1] + 1
+            for _ in range(max_tokens):
+                nxt = torch.where(done, torch.full_like(nxt, pad), nxt)
+                gen.append(nxt)
+                done = done | (nxt == eos)
+                if bool(done.all()):
+                    break
+                dec_mask = torch.cat([dec_mask, torch.ones((len(seqs), 1), dtype=torch.long, device="cuda")], 1)
+                h = model.decode(nxt[:, None], dec_mask, next_pos[:, None], cache)
+                nxt = model.lm_head(h[:, -1]).argmax(-1)
+                next_pos = next_pos + 1
+            model.set_context(None, None)
+        gen_t = torch.stack(gen, 1).tolist()
+        for r, i in enumerate(idx):
+            toks = []
+            for t in gen_t[r]:
+                if t == eos:
+                    break
+                toks.append(t)
+            id_, v, _ = pairs[i]
+            out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+        out.flush()
+        if n_batches % 50 == 1:
+            print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
+
+
+def generate_stitched(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 16) -> None:
+    """Greedy decoding for E3-mix-and-match (src/train/stitched.py): encoder pass through the stitch once per batch,
+    then the T5Gemma 2 decoder from its start token with a growing cache, reading the stitched states."""
+    import torch
+    from transformers import AutoTokenizer, DynamicCache, EncoderDecoderCache
+
+    from src.train.stitched import Stitched
+
+    tok = AutoTokenizer.from_pretrained(model_dir)
+    model = Stitched.load(model_dir, attn="sdpa", gradient_checkpointing=False).cuda().eval()
+    eos = tok.eos_token_id
+    pad = tok.pad_token_id if tok.pad_token_id is not None else eos
+    start = tok.bos_token_id if tok.bos_token_id is not None else eos
+    enc_all = tok([p for _, _, p in pairs])["input_ids"]
+    order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
+    t0 = time.time()
+    bi = 0
+    n_batches = 0
+    while bi < len(order):
+        longest = len(enc_all[order[min(bi + batch, len(order)) - 1]])
+        bs = max(1, min(batch, 160_000 // longest))
+        idx = order[bi:bi + bs]
+        bi += bs
+        n_batches += 1
+        seqs = [enc_all[i] for i in idx]
+        n = max(len(s) for s in seqs)
+        enc_ids = torch.full((len(seqs), n), pad, dtype=torch.long); enc_mask = torch.zeros((len(seqs), n), dtype=torch.long)
+        for r, s in enumerate(seqs):
+            enc_ids[r, :len(s)] = torch.tensor(s); enc_mask[r, :len(s)] = 1
+        enc_ids, enc_mask = enc_ids.cuda(), enc_mask.cuda()
+        with torch.no_grad():
+            enc = model.encode(enc_ids, enc_mask)
+            cache = EncoderDecoderCache(DynamicCache(config=model.config), DynamicCache())
+            dec_mask = torch.ones((len(seqs), 1), dtype=torch.long, device="cuda")
+            nxt = torch.full((len(seqs),), start, dtype=torch.long, device="cuda")
+            pos = torch.zeros((len(seqs), 1), dtype=torch.long, device="cuda")
+            done = torch.zeros(len(seqs), dtype=torch.bool, device="cuda")
+            gen = []
+            for step in range(max_tokens + 1):
+                h = model.decode(nxt[:, None], dec_mask, enc, enc_mask, pos, cache)
+                nxt = model.lm_head(h[:, -1]).argmax(-1)
+                if step == max_tokens:
+                    break
+                nxt = torch.where(done, torch.full_like(nxt, pad), nxt)
+                gen.append(nxt)
+                done = done | (nxt == eos)
+                if bool(done.all()):
+                    break
+                dec_mask = torch.cat([dec_mask, torch.ones((len(seqs), 1), dtype=torch.long, device="cuda")], 1)
+                pos = pos + 1
+        gen_t = torch.stack(gen, 1).tolist()
+        for r, i in enumerate(idx):
+            toks = []
+            for t in gen_t[r]:
                 if t == eos:
                     break
                 toks.append(t)

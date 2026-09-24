@@ -46,7 +46,9 @@ from src.train.data import (
     seq2seq_target_count,
 )
 from src.train.encdec import EncDec
+from src.train.hybrid import Hybrid
 from src.train.masks import FLEX_KERNEL_OPTIONS, prefix_lm_mask
+from src.train.stitched import Stitched
 
 
 def log(msg: str) -> None:
@@ -87,6 +89,43 @@ def load_model(cfg: TrainConfig, device: torch.device):
             if cfg.model.lora_r:
                 raise SystemExit("fsdp is for full-parameter training; drop lora_r")
             return tok, shard_encdec(prepare_for_sharding(model, cfg, device)), attn
+        return tok, model.to(device), attn
+    if cfg.model.arch == "hybrid":
+        if cfg.model.lora_r or cfg.model.sharding == "fsdp":
+            raise SystemExit("hybrid trains every parameter under DDP; drop lora_r / sharding")
+        if attn == "flash_attention_2":
+            try:
+                import flash_attn  # type: ignore[import-untyped]
+            except ImportError:
+                log("flash_attn not importable; falling back to sdpa")
+                attn = "sdpa"
+        if Hybrid.is_hybrid_dir(cfg.model.base):
+            model = Hybrid.load(cfg.model.base, attn, cfg.model.gradient_checkpointing)
+        else:
+            if not cfg.model.encoder_base:
+                raise SystemExit("hybrid needs model.encoder_base (the encoder-decoder whose text encoder is attached)")
+            model = Hybrid.from_pretrained(cfg.model.base, cfg.model.encoder_base, attn, cfg.model.gradient_checkpointing)
+        if getattr(model.config, "final_logit_softcapping", None):
+            raise SystemExit("hybrid: target_loss applies lm_head directly; this decoder's logit softcapping would be skipped")
+        return tok, model.to(device), attn
+    if cfg.model.arch == "stitched":
+        if cfg.model.lora_r:
+            raise SystemExit("stitched trains every parameter; drop lora_r")
+        if attn == "flash_attention_2":
+            log("T5Gemma 2 has no flash-attention path in transformers; using sdpa")
+            attn = "sdpa"
+        if Stitched.is_stitched_dir(cfg.model.base):
+            model = Stitched.load(cfg.model.base, attn, cfg.model.gradient_checkpointing)
+        else:
+            if not cfg.model.encoder_base:
+                raise SystemExit("stitched needs model.encoder_base (the encoder donor); model.base is the decoder donor")
+            if cfg.model.stitch is None:
+                log("model.stitch not set: the stitch starts random (the decoder reads noise at step 0)")
+            model = Stitched.from_pretrained(cfg.model.encoder_base, cfg.model.base, attn, cfg.model.gradient_checkpointing, cfg.model.stitch)
+        if getattr(model.config, "final_logit_softcapping", None):
+            raise SystemExit("stitched: target_loss applies lm_head directly; this decoder's logit softcapping would be skipped")
+        if cfg.model.sharding == "fsdp":  # the 4B arms: ~4.2B parameters, 42 GB of weights, gradients, masters and state
+            return tok, shard_stitched(prepare_for_sharding(model, cfg, device)), attn
         return tok, model.to(device), attn
     if cfg.model.arch == "hf_encdec":
         from transformers import AutoConfig, AutoModelForSeq2SeqLM
@@ -164,6 +203,19 @@ def export_hf(inner, sd: dict[str, torch.Tensor], final: Path) -> None:
         idx.write_text(json.dumps(d, indent=1))
 
 
+def freeze_except(model: torch.nn.Module, trainable: list[str]) -> tuple[int, int]:
+    """Freeze every parameter whose name contains none of the substrings; returns (trainable, frozen) counts."""
+    n_on = n_off = 0
+    for n, p in model.named_parameters():
+        on = any(key in n for key in trainable)
+        p.requires_grad_(on)
+        if on:
+            n_on += p.numel()
+        else:
+            n_off += p.numel()
+    return n_on, n_off
+
+
 def prepare_for_sharding(model, cfg: TrainConfig, device: torch.device):
     """The weights as the optimizer will own them, on the device before sharding: fp32 under the master-copy
     recipe, bf16 under stochastic rounding."""
@@ -197,6 +249,35 @@ class ShardedHF(torch.nn.Module):
 
     def forward(self, batch: dict, device: torch.device, prefix_lm: str | None = None) -> tuple[torch.Tensor, int]:
         return hf_task_loss(self.hf, batch, device, prefix_lm)
+
+
+class ShardedStitched(torch.nn.Module):
+    """A Stitched model behind one forward that computes the task loss (FSDP2 root unit, as ShardedHF). The
+    attribute is named `hf` so the sharded export's prefix handling applies unchanged."""
+
+    def __init__(self, m: Stitched):
+        super().__init__()
+        self.hf = m
+        self.config = m.config
+
+    def forward(self, batch: dict, device: torch.device, prefix_lm: str | None = None) -> tuple[torch.Tensor, int]:
+        labels = batch["labels"].to(device, non_blocking=True)
+        hidden = self.hf(batch["enc_ids"].to(device, non_blocking=True), batch["enc_mask"].to(device, non_blocking=True),
+                         batch["dec_ids"].to(device, non_blocking=True), batch["dec_mask"].to(device, non_blocking=True))
+        mask = labels != -100
+        return chunked_ce(self.hf.lm_head, hidden[mask], labels[mask]), int(mask.sum())
+
+
+def shard_stitched(model: Stitched) -> ShardedStitched:
+    """FSDP2 over the stitched pair: every encoder and decoder block a unit; the stitch, embeddings, norms and head
+    in the root, whose forward is the loss."""
+    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+    mp = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16)
+    for layer in list(model.encoder.layers) + list(model.decoder.layers):
+        fully_shard(layer, mp_policy=mp)
+    wrapped = ShardedStitched(model)
+    fully_shard(wrapped, mp_policy=mp)
+    return wrapped
 
 
 def shard_hf(model) -> ShardedHF:
@@ -246,9 +327,14 @@ def target_loss(model, batch: dict, device: torch.device, prefix_lm: str | None 
     token go through lm_head; nothing else does. `prefix_lm` names the attention implementation when
     the prompt is attended bidirectionally (E2); None keeps the causal mask (E1)."""
     raw = model.module if isinstance(model, DDP) else model
-    if isinstance(raw, ShardedHF):
+    if isinstance(raw, (ShardedHF, ShardedStitched)):
         return raw(batch, device, prefix_lm)  # the root forward: FSDP2 gathers the root's parameters
     labels = batch["labels"].to(device, non_blocking=True)
+    if isinstance(raw, (Hybrid, Stitched)):
+        hidden = raw(batch["enc_ids"].to(device, non_blocking=True), batch["enc_mask"].to(device, non_blocking=True),
+                     batch["dec_ids"].to(device, non_blocking=True), batch["dec_mask"].to(device, non_blocking=True))
+        mask = labels != -100
+        return chunked_ce(raw.lm_head, hidden[mask], labels[mask]), int(mask.sum())
     if isinstance(raw, EncDec):
         hidden, enc = raw(batch["enc_ids"].to(device, non_blocking=True), batch["enc_mask"].to(device, non_blocking=True),
                           batch["dec_ids"].to(device, non_blocking=True), batch["dec_mask"].to(device, non_blocking=True))
@@ -322,6 +408,17 @@ def lr_at(step: int, total: int, cfg: TrainConfig) -> float:
     return o.lr * (o.min_lr_ratio + (1 - o.min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * p)))
 
 
+def param_groups_for(names: list[str], params: list, cfg: TrainConfig) -> list[dict]:
+    """Weight decay off for norms, biases and vectors; a learning-rate multiplier per optim.lr_mult substring
+    (first match wins, 1 otherwise). Groups carry `lr_mult`; set_lr applies it."""
+    groups: dict[tuple[float, float], list] = {}
+    for n, p in zip(names, params):
+        wd = 0.0 if (p.ndim < 2 or "norm" in n or "bias" in n) else cfg.optim.weight_decay
+        mult = next((m for key, m in cfg.optim.lr_mult.items() if key in n), 1.0)
+        groups.setdefault((wd, mult), []).append(p)
+    return [{"params": ps, "weight_decay": wd, "lr_mult": mult} for (wd, mult), ps in groups.items()]
+
+
 class ShardOptimizer:
     """8-bit AdamW over the local shards of an FSDP2 model. fp32_master: the sharded fp32 params are the
     masters, FSDP casts to bf16 for compute (bitsandbytes). bf16_sr: the sharded params are bf16 and torchao's
@@ -333,11 +430,7 @@ class ShardOptimizer:
         self.params = [p for p in model.parameters() if p.requires_grad]
         self.names = [n for n, p in model.named_parameters() if p.requires_grad]
         self.locals = [p.to_local().detach().requires_grad_(True) for p in self.params]  # leaves sharing the storage
-        decay: list[torch.Tensor] = []
-        no_decay: list[torch.Tensor] = []
-        for n, loc in zip(self.names, self.locals):
-            (no_decay if loc.ndim < 2 or "norm" in n or "bias" in n else decay).append(loc)
-        groups = [{"params": decay, "weight_decay": cfg.optim.weight_decay}, {"params": no_decay, "weight_decay": 0.0}]
+        groups = param_groups_for(self.names, self.locals, cfg)
         if cfg.optim.weights == "bf16_sr":
             if any(loc.dtype != torch.bfloat16 for loc in self.locals):
                 raise SystemExit("optim.weights: bf16_sr expects bf16 sharded parameters")
@@ -355,9 +448,9 @@ class ShardOptimizer:
     def set_lr(self, lr: float) -> None:
         for g in self.opt.param_groups:
             if isinstance(g["lr"], torch.Tensor):  # torchao keeps lr as a tensor and refuses a float
-                g["lr"].fill_(lr)
+                g["lr"].fill_(lr * g.get("lr_mult", 1.0))
             else:
-                g["lr"] = lr
+                g["lr"] = lr * g.get("lr_mult", 1.0)
 
     @torch.no_grad()
     def step(self) -> float:
@@ -396,12 +489,7 @@ class MasterOptimizer:
         self.params = [p for p in model.parameters() if p.requires_grad]
         self.names = [n for n, p in model.named_parameters() if p.requires_grad]
         self.masters = [p.detach().float().clone() for p in self.params]
-        decay: list[torch.Tensor] = []
-        no_decay: list[torch.Tensor] = []
-        for n, m in zip(self.names, self.masters):
-            (no_decay if m.ndim < 2 or "norm" in n or "bias" in n else decay).append(m)
-        groups = [{"params": decay, "weight_decay": cfg.optim.weight_decay},
-                  {"params": no_decay, "weight_decay": 0.0}]
+        groups = param_groups_for(self.names, self.masters, cfg)
         self.opt: torch.optim.Optimizer
         if cfg.optim.optimizer == "adamw8bit":
             import bitsandbytes as bnb
@@ -416,7 +504,7 @@ class MasterOptimizer:
 
     def set_lr(self, lr: float) -> None:
         for g in self.opt.param_groups:
-            g["lr"] = lr
+            g["lr"] = lr * g.get("lr_mult", 1.0)
 
     @torch.no_grad()
     def step(self) -> float:
@@ -506,6 +594,9 @@ def latest_checkpoint(run_dir: Path) -> Path | None:
 def val_loss(model, examples: list[Example], idx: list[int], world: int, rank: int, device, pad_id: int,
              micro_tokens: int, prefix_lm: str | None, make_batch, mntp_weight: float = 1.0) -> float:
     model.eval()
+    raw = model.module if isinstance(model, DDP) else model
+    if isinstance(raw, Hybrid):
+        raw.collect_cross_stats(True)
     total = torch.zeros(2, device=device)
     mine = idx[rank::world]
     plan = plan_epoch([examples[i] for i in mine], max(1, len(mine)), micro_tokens, 1, 0, 0) if mine else []
@@ -526,6 +617,12 @@ def val_loss(model, examples: list[Example], idx: list[int], world: int, rank: i
         dist.all_reduce(total)
         dist.all_reduce(comp)
     model.train()
+    if isinstance(raw, Hybrid):  # how much of the residual stream the cross-attention writes (rank 0's share of val)
+        raw.collect_cross_stats(False)
+        cs = raw.cross_stats()
+        log(f"  cross-attention share of the residual: mean over layers {cs.get('cross_ratio_mean', 0):.4f}, max {cs.get('cross_ratio_max', 0):.4f}; "
+            f"gate |1+w|: mean {cs.get('cross_gate_mean', 0):.4f}, max {cs.get('cross_gate_max', 0):.4f}")
+        VAL_PARTS.update(cs)
     if comp[3] > 0:  # mixed objective: report the halves too
         vs, vm = comp[0].item() / max(1, comp[1].item()), comp[2].item() / max(1, comp[3].item())
         log(f"  val components: seq2seq {vs:.4f} ({int(comp[1].item())} tokens), mntp {vm:.4f} ({int(comp[3].item())} tokens)")
@@ -546,6 +643,11 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     tok, model, attn = load_model(cfg, device)
+    if cfg.model.trainable:
+        if is_sharded(model):
+            raise SystemExit("model.trainable: freeze before sharding is not wired for fsdp; use ddp")
+        n_on, n_off = freeze_except(model, cfg.model.trainable)
+        log(f"trainable {cfg.model.trainable}: {n_on / 1e6:.1f}M parameters train, {n_off / 1e6:.1f}M frozen")
     prefix_lm = attn if cfg.model.prefix_lm else None
     adapt = cfg.adapt
     mntp = adapt is not None and adapt.objective == "mntp"
@@ -558,9 +660,13 @@ def main() -> None:
         return mntp_mask(batch, mask_prob, mask_id, seed) if mntp else batch
 
     pad_kw = {"pad_to": 128, "min_len": 256} if prefix_lm else {}
-    encdec = cfg.model.arch in ("encdec", "hf_encdec")
-    # decoder start token: the tokenizer's <bos> for a native encoder-decoder (what T5Gemma 2 was trained with), eos for E3
-    start_id = tok.bos_token_id if cfg.model.arch == "hf_encdec" and tok.bos_token_id is not None else tok.eos_token_id
+    encdec = cfg.model.arch in ("encdec", "hf_encdec", "hybrid", "stitched")
+    # decoder start token: the tokenizer's <bos> for a native encoder-decoder (what T5Gemma 2 was trained with), eos for E3.
+    # The hybrid's decoder reads the prompt itself (opening with the tokenizer's own start token, as in E1): no extra one
+    hybrid = cfg.model.arch == "hybrid"
+    if hybrid and not cfg.model.decoder_sees_prompt:
+        raise SystemExit("hybrid: the decoder reads the prompt; set model.decoder_sees_prompt: true")
+    start_id = tok.bos_token_id if cfg.model.arch in ("hf_encdec", "stitched") and tok.bos_token_id is not None else tok.eos_token_id
     seq2seq = adapt is not None and adapt.objective in ("seq2seq", "mixed")
     mixed = adapt is not None and adapt.objective == "mixed"
     if seq2seq and not encdec:
@@ -589,7 +695,8 @@ def main() -> None:
     def make_batch(examples: list[Example], micro: list[int], seed: int) -> dict:
         if encdec:
             b = collate_encdec(examples, micro, pad_id, start_id, seed, seq2seq,
-                               adapt.max_target if adapt else 2048, adapt.cut if adapt else (0.25, 0.75))
+                               adapt.max_target if adapt else 2048, adapt.cut if adapt else (0.25, 0.75),
+                               dec_prompt=cfg.model.decoder_sees_prompt, dec_start=not hybrid)
             return mask_encoder_side(b, mask_prob, mask_id, seed + 1) if mixed else b
         return prepare(collate(examples, micro, pad_id, **pad_kw), seed)
 
@@ -603,6 +710,9 @@ def main() -> None:
     if encdec:
         n_layers *= 2  # encoder and decoder both run over their inputs; a rough MFU term
     n_flops_params = n_trainable if cfg.model.arch == "hf_encdec" else n_params  # the frozen image tower never runs
+    if cfg.optim.lr_mult:
+        n_mult = sum(p.numel() for n, p in model.named_parameters() if any(k in n for k in cfg.optim.lr_mult))
+        log(f"lr multipliers {cfg.optim.lr_mult}: {n_mult / 1e6:.1f}M parameters")
     log(f"{cfg.model.base}: {n_params / 1e9:.2f}B params ({n_trainable / 1e9:.2f}B trainable), attn={attn}, world={world}")
 
     def data():
@@ -654,8 +764,10 @@ def main() -> None:
             opt.load_state_dict(torch.load(ck / f"optim-rank{rank}.pt", map_location=device))
         else:
             raw = model.module if isinstance(model, DDP) else model
-            raw.load_state_dict(torch.load(ck / "model.pt", map_location=device))
-            opt.load_state_dict(torch.load(ck / "optim.pt", map_location=device))
+            # loaded to CPU and copied into the live tensors: on the device the saved masters and optimizer state would
+            # sit beside the live ones (about 12 GB at 2B parameters), which does not fit next to a 32 GB card's model
+            raw.load_state_dict(torch.load(ck / "model.pt", map_location="cpu"))
+            opt.load_state_dict(torch.load(ck / "optim.pt", map_location="cpu"))
         step0 = json.loads((ck / "state.json").read_text())["step"]
         log(f"resumed from {ck} at step {step0}")
 
@@ -761,7 +873,7 @@ def main() -> None:
             do_ck = bool(flag.item())
         if not args.smoke and do_ck:
             save_checkpoint(run_dir / f"step-{step}", model, opt, step, epoch, cfg, rank)
-            for old in sorted((p for p in run_dir.glob("step-*") if p.name.split("-")[1].isdigit()), key=lambda p: int(p.name.split("-")[1]))[:-2]:
+            for old in sorted((p for p in run_dir.glob("step-*") if p.name.split("-")[1].isdigit()), key=lambda p: int(p.name.split("-")[1]))[:-cfg.keep_checkpoints]:
                 if rank == 0:
                     shutil.rmtree(old)
             t_ck = time.time()
@@ -782,6 +894,9 @@ def main() -> None:
                 torch.save(sd, final / "encdec.pt")
                 base = cfg.model.base if not EncDec.is_encdec_dir(cfg.model.base) else json.loads((Path(cfg.model.base) / "encdec.json").read_text())["base"]
                 (final / "encdec.json").write_text(json.dumps({"base": base, "attn": attn, "lora_r": 0, "lora_alpha": 0}))
+            elif isinstance(model, ShardedStitched):
+                torch.save(sd, final / "stitched.pt")
+                (final / "stitched.json").write_text(json.dumps({"enc_base": model.hf.enc_base, "dec_base": model.hf.dec_base, "attn": attn}))
             else:
                 inner = model.hf if isinstance(model, ShardedHF) else model
                 export_hf(inner, sd, final)
@@ -792,7 +907,7 @@ def main() -> None:
     elif not args.smoke and rank == 0:
         raw = model.module if isinstance(model, DDP) else model
         final = run_dir / "final"
-        if isinstance(raw, EncDec):
+        if isinstance(raw, (EncDec, Hybrid, Stitched)):
             raw.save(final, tok)
         else:
             raw.save_pretrained(final, safe_serialization=True)

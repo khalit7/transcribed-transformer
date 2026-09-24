@@ -1,6 +1,6 @@
 # E0: Claude Sonnet 5 on the benchmark, through `claude -p`
 
-Written before the run finished, 2026-09-17 01:00. Khalid: "Run E0 on sonnet", then "Use claude -p anyway" when offered the direct API, then "Use 8 workers".
+Written before the run finished, 2026-09-17 01:00. Run on Sonnet 5 through the Claude Code CLI (`claude -p`) rather than the direct API, with 8 workers.
 
 ## Hypothesis
 
@@ -15,7 +15,7 @@ The README's E0 row: a frontier model behind an API, given the same prompt and t
 
 ## Setup
 
-- Route: `claude -p --model sonnet --output-format json` (resolves to `claude-sonnet-5`), the labelling pipeline's route (`src/synthesis/llm.py`), billed to the personal subscription account; `src/train/api_baseline.py --backend cli --account p --workers 8`. The direct Message Batches path (`--backend batch`, transcript block cached, about $35 at list price) is implemented and was declined for want of an API key. Every CLI call carries Claude Code's own context (16–30k cached tokens per call), so the CLI's reported cost is a notional list-price figure dominated by that overhead: the pilot ran at $0.082 per call cold and about $0.011–0.037 with the cache warm.
+- Route: `claude -p --model sonnet --output-format json` (resolves to `claude-sonnet-5`), the labelling pipeline's route (`src/synthesis/llm.py`); `src/train/api_baseline.py --backend cli --workers 8`. The direct Message Batches path (`--backend batch`, transcript block cached, about $35 at list price) is implemented but was not used for this run. Every CLI call carries Claude Code's own context (16–30k cached tokens per call), so the CLI's reported cost is a notional list-price figure dominated by that overhead: the pilot ran at $0.082 per call cold and about $0.011–0.037 with the cache warm.
 - Working directory: an empty one. `claude -p` loads `CLAUDE.md` and memory from its cwd; a first attempt (354 calls, kept under `checkpoints/e0-sonnet5-cli-pilot/`) ran from the repository and carried the project's instructions into every prompt. Discarded and restarted at 00:53.
 - Prompt: `src/train/data.task_prompt`, byte-identical to the trained models' input, as the user turn; no system prompt of ours (the harness's own applies); the CLI's default sampling and output cap. Questions of one transcript go to one worker in sequence so the harness's automatic caching can reuse the transcript prefix.
 - Output: the same records as `generate.py` (id, variant, raw text, `prompt_tokens` counted with the Qwen3 tokenizer so length buckets match E1's), plus the API's usage and cost per call; scored by `evaluate.py` under the same strict parser as every arm.
@@ -24,7 +24,7 @@ The README's E0 row: a frontier model behind an API, given the same prompt and t
 
 ## Result
 
-In progress, paused. Run history: 8 workers from 00:53 on 2026-09-17, cut to 2 workers at 10:13 at Khalid's request after the second subscription-limit window; the machine rebooted on 2026-09-19 with 24,298 of 38,220 requests done; relaunched 2026-09-20 10:47 and stopped at 10:52 at Khalid's request ("stop E0 for now") at 24,330 done. Resumed 2026-09-20 with one worker (10:47, personal account), killed by a full disk at 16:42 (one truncated record dropped), resumed 17:20 and stopped at 17:35 at Khalid's request, then resumed at 17:36 on the **work** subscription account for the remainder (Khalid: "Use claude work for E0. Use one worker"). Account boundary: records 1–26,373 of `gen.jsonl` (in file order) were billed to the personal account, the rest to the work account; the per-record fields do not carry the account. Every completed request is on disk; a relaunch resumes from there. Limit windows on the personal account: about thirty, the longest 202 minutes. Numbers: TBD until the run completes.
+In progress, paused. Run history: 8 workers from 00:53 on 2026-09-17, cut to 2 workers at 10:13 after hitting the subscription's usage limits a second time; the machine rebooted on 2026-09-19 with 24,298 of 38,220 requests done; relaunched 2026-09-20 with one worker and paused and resumed several times since, once after a full disk (one truncated record dropped). About thirty usage-limit pauses so far, the longest 202 minutes. Every completed request is on disk; a relaunch resumes from there. Numbers: TBD until the run completes.
 
 ## Verdict
 

@@ -1,0 +1,33 @@
+# E3-mix-and-match idea 2, arm C: the T5Gemma 2 4b-4b encoder (2560 wide) with the T5Gemma 2 270m-270m decoder (640 wide),
+# joined by an affine stitch on the encoder states fitted by ridge regression onto the 270m encoder's states
+# (checkpoints/stitch/4b-to-270m.pt, src/train/fit_stitch.py), so the decoder reads a familiar input at step 0.
+# Everything trains under E1's recipe (16k cap, SDPA); ~4.2B parameters need FSDP (as the Gemma 3 4B control did) and 8k micro-batches.
+# Grid extension: the 1B arms exist; arm D is the mirror (configs/e3/stitch-270m-enc-4b-dec.yaml).
+experiment: e3
+name: e3-stitch-4b-enc-270m-dec
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/t5gemma-2-270m-270m       # the decoder donor
+  encoder_base: google/t5gemma-2-4b-4b   # the encoder donor
+  stitch: checkpoints/stitch/4b-to-270m.pt
+  arch: stitched
+  attn: sdpa
+  sharding: fsdp
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 8192
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-encdec
+tags: [mix-and-match, stitched, enc-google/t5gemma-2-4b-4b, dec-google/t5gemma-2-270m-270m, full-params, grid-4b-enc-270m-dec]

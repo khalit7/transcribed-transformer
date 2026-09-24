@@ -72,7 +72,7 @@ class Writer:
             f.close()
         ls = sorted(self.lengths)
         n = len(ls)
-        pct = lambda p: ls[min(n - 1, int(p * n))] if n else 0  # noqa: E731
+        pct = lambda p: ls[min(n - 1, int(p * n))] if n else 0
         summary = {
             "docs": self.docs,
             "words": self.words,

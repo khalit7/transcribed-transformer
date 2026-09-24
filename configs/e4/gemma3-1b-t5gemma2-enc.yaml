@@ -1,0 +1,32 @@
+# E4b: the Gemma 3 1B decoder (E1's control for the T5Gemma 2 pair) given the T5Gemma 2 1b-1b text encoder over the
+# prompt through new zero-initialised cross-attention in every layer. The decoder's input is exactly E1's (start token,
+# prompt, answer; self-attention over all of it); at step 0 the model is E1's; whatever changes is the encoder's doing.
+# E1's recipe; the cross-attention gate (the post-norm weight) trains at 100× and the copied projections at 10× so a 2.8k-step
+# fine-tune has a chance to route through the new path; 16k cap as the pair; DDP.
+experiment: e4
+name: e4b-gemma3-1b-t5gemma2-enc
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-1b-pt
+  encoder_base: google/t5gemma-2-1b-1b
+  arch: hybrid
+  decoder_sees_prompt: true
+  attn: flash_attention_2   # the decoder; the T5Gemma 2 encoder has no flash-attention path and runs under sdpa
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  lr_mult: {post_cross_layernorm: 100, cross: 10}   # first match wins: the gate (a norm weight Adam moves by at most lr per step) at 100×, the copied projections at 10×
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 8192    # 16384 ran out of memory in the smoke (29 GiB peak at 3 steps, OOM at the checkpoint run): 2.08B trainable parameters with fp32 masters leave less room than the 1b-1b had
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-encdec
+tags: [hybrid, decoder-only-plus-encoder, google/gemma-3-1b-pt, google/t5gemma-2-1b-1b, full-params, decoder-sees-prompt, control-e1-gemma3-1b-pt]

@@ -21,7 +21,7 @@ One directory per run, `experiments/<date>-<short-slug>/`, containing a `README.
 
 - **Hypothesis** — what is believed, and why it might be true
 - **Prediction** — the specific measurable outcome expected, and what result would disconfirm it
-- **Setup** — experiment (E0 to E5), base checkpoint, dataset build, key hyperparameters. Point at the wandb run for the full config rather than duplicating it.
+- **Setup** — experiment (E0 to E6), base checkpoint, dataset build, key hyperparameters. Point at the wandb run for the full config rather than duplicating it.
 - **wandb run** — project and run id, as a link
 - **Result** — what actually happened, with numbers read from wandb, not recalled
 - **Verdict** — confirmed, disconfirmed, or inconclusive, and what changes as a result
@@ -36,6 +36,8 @@ One directory per run, `experiments/<date>-<short-slug>/`, containing a `README.
 **Disconfirmation gets the same treatment as confirmation.** The two central hypotheses in this project (bidirectional attention helps; transcript pretraining helps) may turn out to be false. Those entries are among the most valuable in the repository and are written up with the same care.
 
 **Do not retro-edit a hypothesis to match a result.** If the original hypothesis was wrong, that is what the verdict field records. Rewriting it destroys the only evidence of what was actually predicted.
+
+**Write in the owner's first person.** Record decisions and reasoning as "I chose ..." / "I stopped the run because ...", never "Khalid asked ..." and never a quote of the session conversation. Leave out which assistant proposed what and which account paid for a run. See Writing conventions in `CLAUDE.md`.
 
 ## Cross-linking
 

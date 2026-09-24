@@ -23,7 +23,7 @@ ASR_SYSTEM = "Speechmatics (as distributed by MeetingBank)"
 
 
 def main() -> None:
-    meetings: "OrderedDict[str, list[dict]]" = OrderedDict()
+    meetings: OrderedDict[str, list[dict]] = OrderedDict()
     for split in ("train", "validation", "test"):
         for line in (RAW / "meetingbank" / f"{split}.json").open():
             r = json.loads(line)

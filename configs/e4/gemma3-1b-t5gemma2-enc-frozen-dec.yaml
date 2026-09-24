@@ -1,0 +1,31 @@
+# E4c: E4b with the decoder frozen (embeddings and head included): only the T5Gemma 2 encoder and the new cross-attention
+# sublayers (with their norms) train, so the task can only be learnt through the encoder path. Everything else as E4b, the
+# single change being model.trainable. Compared against E4b (everything trained) and E1 on the same decoder (fully fine-tuned).
+experiment: e4
+name: e4c-gemma3-1b-t5gemma2-enc-frozen-dec
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-1b-pt
+  encoder_base: google/t5gemma-2-1b-1b
+  arch: hybrid
+  decoder_sees_prompt: true
+  trainable: [encoder, cross]   # substrings of parameter names: the T5Gemma 2 encoder, the cross-attention sublayers and their norms
+  attn: flash_attention_2   # the decoder; the T5Gemma 2 encoder has no flash-attention path and runs under sdpa
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  lr_mult: {post_cross_layernorm: 100, cross: 10}   # first match wins: the gate (a norm weight Adam moves by at most lr per step) at 100×, the copied projections at 10×
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 8192    # 16384 ran out of memory in the smoke (29 GiB peak at 3 steps, OOM at the checkpoint run): 2.08B trainable parameters with fp32 masters leave less room than the 1b-1b had
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-encdec
+tags: [hybrid, frozen-decoder, decoder-only-plus-encoder, google/gemma-3-1b-pt, google/t5gemma-2-1b-1b, encoder-and-cross-only, decoder-sees-prompt, control-e1-gemma3-1b-pt]

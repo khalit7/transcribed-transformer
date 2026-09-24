@@ -1,0 +1,29 @@
+# E4 (hybrid): T5Gemma 2 1b-1b with the decoder reading the raw prompt as well (self-attention over start token +
+# prompt + target, loss on the target) while cross-attending to the encoder's states of the same prompt. The
+# model's merged attention already covers both paths, so no new weights. Same recipe, data, split, steps and
+# 16k cap as configs/e3/t5gemma2-1b-1b.yaml; the comparison is against that run and the Gemma 3 1B decoder.
+experiment: e4
+name: e4-t5gemma2-1b-1b-hybrid
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/t5gemma-2-1b-1b
+  arch: hf_encdec
+  decoder_sees_prompt: true
+  attn: sdpa
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1   # the disk is nearly full: one 17 GB resume checkpoint instead of two
+wandb_project: tt-encdec
+tags: [native, hybrid, google/t5gemma-2-1b-1b, full-params, decoder-sees-prompt]

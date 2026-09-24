@@ -10,7 +10,7 @@ Before acting, check the working tree and current run state; preserve existing e
 
 ## What this project is
 
-Research towards models that answer compliance questions over collections of ASR call transcripts, comparing a prompted **API model** baseline with trained arms built from one model family: a causal **decoder**, a **prefix-LM** decoder (bidirectional attention over the transcript), an **encoder-decoder**, and two frozen-encoder designs (the table in `README.md`, "Design").
+Research towards models that answer compliance questions over collections of ASR call transcripts, comparing a prompted **API model** baseline with trained arms built from one model family: a causal **decoder**, a **prefix-LM** decoder (bidirectional attention over the transcript), an **encoder-decoder**, a **hybrid** encoder-decoder whose decoder also reads the raw input, and two frozen-encoder designs (the table in `README.md`, "Design").
 
 The task shape: input is a case (one or more diarised ASR transcripts of calls between staff and customers, speaker-labelled turns with no role labels, one turn per line, up to tens of thousands of tokens each). Input also includes a compliance question and explicit definitions of what constitutes each of its possible answers. Output is a triple:
 
@@ -94,9 +94,9 @@ Sources are immutable under `data/raw/<dataset>/`, one folder per dataset. Deriv
 
 Every training and evaluation run logs to Weights & Biases. There is no second logging path.
 
-- **Projects**: `tt-baselines` (E0), `tt-decoder` (E1, E2), `tt-encdec` (E3, E4, E5), `tt-pretrain` (continued pretraining, adaptation stages, channel-model fitting).
+- **Projects**: `tt-baselines` (E0), `tt-decoder` (E1, E2), `tt-encdec` (E3, E4, E5, E6), `tt-pretrain` (continued pretraining, adaptation stages, channel-model fitting).
 - **Log the fully resolved config** as the run config, not a path to a YAML. A run must be reproducible from wandb alone.
-- **Mandatory tags on every run**: experiment (`e0` to `e5`), base checkpoint and size. Results tables are generated from the wandb API filtered on these tags, which is what stops written numbers drifting from real ones.
+- **Mandatory tags on every run**: experiment (`e0` to `e6`), base checkpoint and size. Results tables are generated from the wandb API filtered on these tags, which is what stops written numbers drifting from real ones.
 - **Always logged**: loss, learning rate, grad norm, tokens seen, throughput (tokens/s and MFU), per-GPU memory.
 - **Evaluation logs to the same run id** as the training job that produced the checkpoint. A checkpoint's quality and its training curve are never separated.
 - **Artefacts** (tokenizer, ASR channel-model parameters, benchmark version) versioned as wandb artifacts, so any result traces back to the exact data that produced it.
@@ -120,6 +120,7 @@ Dual RTX 5090 (Blackwell, sm_120, 32GB each, **no NVLink**, PCIe).
 - Prose should be legible to someone who does not already know this project. Lead with the outcome, not the plumbing.
 - Do not oversell. This project's credibility rests on stated limitations being honest.
 - Keep the data sheets current when a dataset is added, removed, or re-scoped.
+- **Experiment records are written in the owner's first person, as decisions and reasoning.** `experiments/` is public and is read as evidence of the owner's research judgement. Write "I switched to full-parameter training so the arm matches E1", never "Khalid asked for ..." or a quote of what the owner typed in a session ("lets do it", "yes do your recommendation"). State the idea or question in its own words, not as a chat transcript. Do not describe the tooling conversation (which assistant proposed what, which account or subscription paid for a run); record only what a reader needs to reproduce the run.
 - **Two terms, never swapped.** *LLM labelling* is a model answering a question about a transcript (producing answer, evidence, summary); that model is the **labeller**. *LLM-as-a-judge* is a model assessing how good such an answer is; that model is the **judge**. `src/synthesis` labels; a judge is only ever the grader of labels. Do not call a labeller a judge, in code, prompts, docs or notes.
 
 ## Git

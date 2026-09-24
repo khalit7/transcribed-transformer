@@ -1,6 +1,6 @@
 ---
 name: train-run
-description: Launch a training run on the dual RTX 5090 machine. Use whenever starting, resuming or debugging any training job (continued pretraining, task fine-tuning of any experiment E1 to E5, adaptation stages such as prefix-LM warm-up or encoder-decoder conversion). Covers the config, wandb, checkpointing and Blackwell-specific conventions.
+description: Launch a training run on the dual RTX 5090 machine. Use whenever starting, resuming or debugging any training job (continued pretraining, task fine-tuning of any experiment E1 to E6, adaptation stages such as prefix-LM warm-up or encoder-decoder conversion). Covers the config, wandb, checkpointing and Blackwell-specific conventions.
 ---
 
 # Launching a training run
@@ -9,7 +9,7 @@ description: Launch a training run on the dual RTX 5090 machine. Use whenever st
 
 **Training uses every record regardless of licence track.** The tracks restrict what is released from this repository (the labelled-data export), not what a model may see; training and evaluation are research-only. Do not filter a run by track and do not tag one.
 
-**Check the comparability rules** (README, "Design"). Every trained arm starts from the same Qwen3 checkpoint at the same size, on the same split and rendering, with loss on the answer only and zero prompt loss, at the same sequence length. An arm differs from E1 in exactly one thing: the attention mask (E2) or the architecture built from the same weights (E3 to E5). If a run needs a second difference to work, that is a finding to record, not a setting to bury.
+**Check the comparability rules** (README, "Design"). Every trained arm starts from the same Qwen3 checkpoint at the same size, on the same split and rendering, with loss on the answer only and zero prompt loss, at the same sequence length. An arm differs from E1 in exactly one thing: the attention mask (E2) or the architecture built from the same weights (E3 to E6). If a run needs a second difference to work, that is a finding to record, not a setting to bury.
 
 **Check the config is complete.** Configs are YAML under `configs/`. Adding a model, dataset or experiment means adding a class and pointing a config at it. If launching this run requires editing the training loop, stop: the abstraction is wrong and should be fixed instead.
 
@@ -28,9 +28,9 @@ Dual RTX 5090, Blackwell sm_120, 32GB each, **no NVLink**, PCIe.
 
 Every run logs to wandb. There is no second logging path.
 
-- Projects: `tt-baselines` (E0), `tt-decoder` (E1, E2), `tt-encdec` (E3, E4, E5), `tt-pretrain` (continued pretraining, adaptation stages, channel-model fitting).
+- Projects: `tt-baselines` (E0), `tt-decoder` (E1, E2), `tt-encdec` (E3, E4, E5, E6), `tt-pretrain` (continued pretraining, adaptation stages, channel-model fitting).
 - **Log the fully resolved config**, not a path to a YAML. The run must be reproducible from wandb alone.
-- **Mandatory tags**: experiment (`e0` to `e5`), base checkpoint (the HF id), size. Results tables are generated from the wandb API filtered on these tags. An untagged run is invisible to the results pipeline.
+- **Mandatory tags**: experiment (`e0` to `e6`), base checkpoint (the HF id), size. Results tables are generated from the wandb API filtered on these tags. An untagged run is invisible to the results pipeline.
 - **Always log**: loss, learning rate, grad norm, tokens seen, throughput (tokens/s and MFU), per-GPU memory. Throughput and MFU are how the project's compute estimates become measured facts rather than assumptions.
 - Version the tokenizer, ASR channel parameters and dataset build (`splits.json` version) as wandb artifacts so any result traces to the data that produced it.
 - `WANDB_API_KEY` from the environment, never committed.
