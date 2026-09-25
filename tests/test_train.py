@@ -420,3 +420,30 @@ def test_sharded_stitched_root_forward_is_the_task_loss():
     loss, n = root(b, torch.device("cpu"))
     assert n == 3 and loss.ndim == 0 and torch.isfinite(loss) and loss > 0
     assert root.config is m.config and root.hf is m
+
+
+def test_freeze_named_freezes_only_the_named_parameters():
+    import torch
+
+    from src.train.train import freeze_named
+    m = torch.nn.ModuleDict({"embed_tokens": torch.nn.Linear(4, 4, bias=False), "layer": torch.nn.Linear(4, 4, bias=False)})
+    n_on, n_off = freeze_named(m, ["embed_tokens"])
+    assert n_on == 16 and n_off == 16
+    assert not m["embed_tokens"].weight.requires_grad and m["layer"].weight.requires_grad
+
+
+def test_stitched_load_retties_a_head_missing_from_an_fsdp_export(tmp_path, monkeypatch):
+    import torch
+
+    from src.train import stitched as st
+    m = _tiny_stitched()
+    m.lm_head.out_proj.weight = m.decoder.embed_tokens.weight  # tied, as in the real decoder
+    sd = {k: v for k, v in m.state_dict().items() if k != "lm_head.out_proj.weight"}  # what an FSDP gather produces
+    torch.save(sd, tmp_path / "stitched.pt")
+    (tmp_path / "stitched.json").write_text('{"enc_base": "enc", "dec_base": "dec", "attn": "sdpa"}')
+    fresh = _tiny_stitched()
+    monkeypatch.setattr(st.Stitched, "from_pretrained", classmethod(lambda cls, *a, **k: fresh))
+    loaded = st.Stitched.load(tmp_path)
+    assert loaded.lm_head.out_proj.weight.data_ptr() == loaded.decoder.embed_tokens.weight.data_ptr()
+    assert torch.equal(loaded.decoder.embed_tokens.weight, m.decoder.embed_tokens.weight)
+    assert torch.equal(loaded.stitch.weight, m.stitch.weight)

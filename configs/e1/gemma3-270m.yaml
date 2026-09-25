@@ -1,5 +1,5 @@
 # E1 on Gemma 3 270M (pretrained, text only), the decoder T5Gemma 2 270m-270m was adapted from: the control for
-# configs/e3/t5gemma2-270m-270m.yaml. E1's recipe unchanged; context capped at 16k to match its pair.
+# configs/e4/t5gemma2-270m-270m.yaml. E1's recipe unchanged; context capped at 16k to match its pair.
 experiment: e1
 name: e1-gemma3-270m
 seed: 0

@@ -20,7 +20,7 @@ The primary metric is fixed before training: unseen-question messy macro-F1. Rep
 - E1 precision and optimiser unchanged: bf16 compute, fp32 masters, 8-bit AdamW, learning rate 1e-5, 50 warm-up steps, cosine decay, weight decay 0.1. Full text-parameter training, FlashAttention 2 and activation checkpointing.
 - Two RTX 5090s, FSDP required: the unsharded fp32-master probe failed on its first optimiser update, before adding any DDP overhead. Checkpoints every 30 minutes, latest two retained. Validate checkpoint reload before the full run.
 - W&B online, as explicitly reaffirmed by the owner. Resolved configuration, tokenizer and split provenance accompany the run.
-- Comparison: [native T5Gemma 2/Gemma 3 pairs](../2026-09-15-e3-t5gemma2-1b-1b-native-pair/README.md). This additional baseline does not alter their original hypotheses.
+- Comparison: [native T5Gemma 2/Gemma 3 pairs](../2026-09-15-e4-t5gemma2-1b-1b-native-pair/README.md). This additional baseline does not alter their original hypotheses.
 
 ## W&B run
 
@@ -81,4 +81,4 @@ Execution verified on 2026-09-20 against the E1 recipe: same data, split, render
 ## Follow-ups
 
 - The parameter-matched control this run was meant to be is SmolLM2-1.7B (1.61B non-embedding, ungated; 8k native context, so it needs RoPE extension or an 8k cap that halves the benchmark) or Llama 3.2 1B/3B (gated). SmolLM2-1.7B under the E1 recipe would give a second cross-family decoder at the 1b-1b's size.
-- Repeat E3 and the strongest decoder with a second seed before claiming a robust advantage; select any hyperparameters on validation only with equal tuning budgets.
+- Repeat the E4 native pair and the strongest decoder with a second seed before claiming a robust advantage; select any hyperparameters on validation only with equal tuning budgets.

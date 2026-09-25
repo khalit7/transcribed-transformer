@@ -1,6 +1,6 @@
 """Fine-tune a decoder on (prompt, target) examples with the loss on the target only.
 
-    torchrun --nproc_per_node 2 -m src.train.train configs/e1/qwen3-1.7b-base-p.yaml [--resume] [--smoke N]
+    torchrun --nproc_per_node 2 -m src.train.train configs/e1/qwen3-1.7b-base.yaml [--resume] [--smoke N]
 
 Data parallel (DDP, one process per GPU). The model and its gradients are bf16; the optimizer owns
 an fp32 master copy of every parameter and writes the update back after each step (bf16 alone
@@ -125,6 +125,9 @@ def load_model(cfg: TrainConfig, device: torch.device):
         if getattr(model.config, "final_logit_softcapping", None):
             raise SystemExit("stitched: target_loss applies lm_head directly; this decoder's logit softcapping would be skipped")
         if cfg.model.sharding == "fsdp":  # the 4B arms: ~4.2B parameters, 42 GB of weights, gradients, masters and state
+            if cfg.model.frozen:  # before sharding: FSDP2 keeps per-parameter requires_grad, the optimizer skips frozen shards
+                n_on, n_off = freeze_named(model, cfg.model.frozen)
+                log(f"frozen {cfg.model.frozen}: {n_on / 1e6:.1f}M parameters train, {n_off / 1e6:.1f}M frozen")
             return tok, shard_stitched(prepare_for_sharding(model, cfg, device)), attn
         return tok, model.to(device), attn
     if cfg.model.arch == "hf_encdec":
@@ -210,6 +213,19 @@ def freeze_except(model: torch.nn.Module, trainable: list[str]) -> tuple[int, in
         on = any(key in n for key in trainable)
         p.requires_grad_(on)
         if on:
+            n_on += p.numel()
+        else:
+            n_off += p.numel()
+    return n_on, n_off
+
+
+def freeze_named(model: torch.nn.Module, frozen: list[str]) -> tuple[int, int]:
+    """Freeze every parameter whose name contains any of the substrings; returns (trainable, frozen) counts."""
+    n_on = n_off = 0
+    for n, p in model.named_parameters():
+        if any(key in n for key in frozen):
+            p.requires_grad_(False)
+        if p.requires_grad:
             n_on += p.numel()
         else:
             n_off += p.numel()
@@ -648,6 +664,9 @@ def main() -> None:
             raise SystemExit("model.trainable: freeze before sharding is not wired for fsdp; use ddp")
         n_on, n_off = freeze_except(model, cfg.model.trainable)
         log(f"trainable {cfg.model.trainable}: {n_on / 1e6:.1f}M parameters train, {n_off / 1e6:.1f}M frozen")
+    if cfg.model.frozen and not is_sharded(model):  # the sharded stitched path froze before sharding
+        n_on, n_off = freeze_named(model, cfg.model.frozen)
+        log(f"frozen {cfg.model.frozen}: {n_on / 1e6:.1f}M parameters train, {n_off / 1e6:.1f}M frozen")
     prefix_lm = attn if cfg.model.prefix_lm else None
     adapt = cfg.adapt
     mntp = adapt is not None and adapt.objective == "mntp"

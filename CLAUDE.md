@@ -10,7 +10,7 @@ Before acting, check the working tree and current run state; preserve existing e
 
 ## What this project is
 
-Research towards models that answer compliance questions over collections of ASR call transcripts, comparing a prompted **API model** baseline with trained arms built from one model family: a causal **decoder**, a **prefix-LM** decoder (bidirectional attention over the transcript), an **encoder-decoder**, a **hybrid** encoder-decoder whose decoder also reads the raw input, and two frozen-encoder designs (the table in `README.md`, "Design").
+Research towards models that answer compliance questions over collections of ASR call transcripts, comparing a prompted **API model** baseline with trained arms, each measured against a decoder-only control from its own model family: a causal **decoder** (E1), a **prefix-LM** decoder with bidirectional attention over the transcript (E2), an **encoder-decoder built by our own adaptation** of a decoder-only model (E3), **native encoder-decoders** and their **mix-and-match** stitches of one native encoder to a different native decoder (E4), an encoder **stitched into a different decoder's embedding space** (E5), and **hybrids** whose decoder reads both the encoder's output and the raw prompt (E6); the table in `README.md`, "Design".
 
 The task shape: input is a case (one or more diarised ASR transcripts of calls between staff and customers, speaker-labelled turns with no role labels, one turn per line, up to tens of thousands of tokens each). Input also includes a compliance question and explicit definitions of what constitutes each of its possible answers. Output is a triple:
 

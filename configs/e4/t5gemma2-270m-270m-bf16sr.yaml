@@ -1,8 +1,8 @@
-# Recipe check: configs/e3/t5gemma2-270m-270m.yaml re-run under the sharded bf16 + stochastic-rounding recipe
+# Recipe check: configs/e4/t5gemma2-270m-270m.yaml re-run under the sharded bf16 + stochastic-rounding recipe
 # (fsdp, optim.weights: bf16_sr) that the 4B pair needs. Must reproduce the fp32-master run within noise before
 # either 4B arm uses it.
-experiment: e3
-name: e3-t5gemma2-270m-270m-bf16sr
+experiment: e4
+name: e4-t5gemma2-270m-270m-bf16sr
 seed: 0
 data:
   variants: [labelled]

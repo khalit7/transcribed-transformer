@@ -1,4 +1,4 @@
-"""Fit the stitch for E3-mix-and-match: an affine map from one T5Gemma 2 encoder's final states onto another's.
+"""Fit the stitch for E4-mix-and-match: an affine map from one T5Gemma 2 encoder's final states onto another's.
 
     uv run python -m src.train.fit_stitch --source google/t5gemma-2-1b-1b --target google/t5gemma-2-270m-270m \
         --out checkpoints/stitch/1b-to-270m.pt
@@ -84,6 +84,9 @@ def main() -> None:
     xh, yh = torch.cat(xh), torch.cat(yh)
     print(f"fit tokens {moments.n:,}, held-out {xh.shape[0]:,}, {d_in} -> {d_out}, {time.time() - t0:.0f}s of encoding", flush=True)
     w, b = moments.solve(args.ridge)
+    src.to("cpu"); tgt.to("cpu")  # the encoders are done; the held-out check needs the card's memory for a wide target
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
     ev = explained_variance(xh.double().to(device), yh.double().to(device), w, b)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"weight": w.float().cpu(), "bias": b.float().cpu(), "source": args.source, "target": args.target,

@@ -1,4 +1,4 @@
-"""E4b: a decoder-only model given an encoder through new cross-attention.
+"""E6 (decoder-only + encoder): a decoder-only model given an encoder through new cross-attention.
 
 The decoder is a causal language model (Gemma 3 1B) fed the prompt and the answer exactly as in E1: its
 self-attention sees every token. The encoder is the bidirectional text encoder of a native encoder-decoder

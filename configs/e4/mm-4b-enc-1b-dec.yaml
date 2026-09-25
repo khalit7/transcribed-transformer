@@ -1,0 +1,36 @@
+# E4-mix-and-match idea 2, arm E: the T5Gemma 2 4b-4b encoder (2560 wide) with the T5Gemma 2 1b-1b decoder (1152 wide),
+# joined by an affine stitch on the encoder states fitted by ridge regression onto the 1b encoder's states
+# (checkpoints/stitch/4b-to-1b.pt, not yet fitted: run src/train/fit_stitch.py first), so the decoder reads a familiar input at step 0.
+# ~4.9B parameters: about 1 GB per card over what FSDP with fp32 masters fits at the 16k tail, so the two embedding tables
+# (0.97B; model.frozen: [embed_tokens]) are frozen on this machine; every other parameter trains under E1's recipe. The
+# exact-recipe variant for a single 80 GB card is mm-4b-enc-1b-dec-80gb.yaml.
+# Grid: the 270M-decoder column has 1B and 4B encoders; this adds the 4B encoder to the 1B-decoder column.
+experiment: e4
+name: e4mm-4b-enc-1b-dec
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/t5gemma-2-1b-1b           # the decoder donor
+  encoder_base: google/t5gemma-2-4b-4b   # the encoder donor
+  stitch: checkpoints/stitch/4b-to-1b.pt
+  arch: stitched
+  attn: sdpa
+  sharding: fsdp
+  frozen: [embed_tokens]
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 8192
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-encdec
+tags: [mix-and-match, stitched, enc-google/t5gemma-2-4b-4b, dec-google/t5gemma-2-1b-1b, embeddings-frozen, grid-4b-enc-1b-dec]

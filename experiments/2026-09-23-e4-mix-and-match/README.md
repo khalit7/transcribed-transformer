@@ -1,4 +1,4 @@
-# E3-mix-and-match: unbalanced T5Gemma 2 pairs, 1B encoder + 270M decoder and 270M encoder + 1B decoder
+# E4-mix-and-match: unbalanced T5Gemma 2 pairs, 1B encoder + 270M decoder and 270M encoder + 1B decoder
 
 Written before the run, 2026-09-23. The question: at a fixed budget, is it better to spend parameters on the encoder or on the decoder? Compare 1B-270M against 270M-1B, joined by the fitted stitch described below.
 
@@ -20,8 +20,8 @@ The balanced pairs (270m-270m, 1b-1b) showed the encoder-decoder beating its own
 - Training: E1's recipe as the balanced pairs (lr 1e-5, cosine, one epoch, 32 sequences per step, AdamW 8-bit with fp32 masters), every parameter, DDP, SDPA (no flash path for T5Gemma 2), 16k cap and 16k micro-batch.
 - Generation: `generate.py --backend stitched` (encoder pass through the stitch, then the T5Gemma 2 decoder from its start token with a growing cache), benchmark in halves and quarters over both GPUs; scoring as every run.
 - Tests: stitched forward and shapes, padded encoder keys never attended, gradients reach stitch, encoder and decoder; the fitting routine recovers a known affine map and the explained variance reads it.
-- Queue 19, after queue 17 (E4b): arm A then arm B, each: fit, smoke, train, generate, score. E4c (queue 18) postponed for this.
-- wandb: tt-encdec, run ids in `checkpoints/e3-stitch-*/wandb_id`.
+- Queue 19, after queue 17 (the E6 decoder-only + encoder arm): arm A then arm B, each: fit, smoke, train, generate, score. The E6 frozen-decoder arm (queue 18) postponed for this.
+- wandb: tt-encdec, run ids in `checkpoints/e4mm-*/wandb_id`.
 
 ## Result
 

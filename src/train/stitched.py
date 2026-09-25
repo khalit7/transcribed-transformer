@@ -1,4 +1,4 @@
-"""E3-mix-and-match: a T5Gemma 2 encoder of one size with a T5Gemma 2 decoder of another, joined by a linear stitch.
+"""E4-mix-and-match: a T5Gemma 2 encoder of one size with a T5Gemma 2 decoder of another, joined by a linear stitch.
 
 The decoder reads encoder states through its own key and value projections (merged attention, no separate
 cross-attention weights), so the states it receives must have the decoder's width and, to be readable from
@@ -85,7 +85,15 @@ class Stitched(nn.Module):
         path = Path(path)
         meta = json.loads((path / "stitched.json").read_text())
         m = cls.from_pretrained(meta["enc_base"], meta["dec_base"], attn or meta["attn"], gradient_checkpointing)
-        m.load_state_dict(torch.load(path / "stitched.pt", map_location="cpu"))
+        sd = torch.load(path / "stitched.pt", map_location="cpu")
+        # the head is tied to the decoder's embeddings; an export gathered from FSDP shards carries the shared tensor
+        # once, under the embedding key, so the head key may be absent: load what is there and re-tie
+        missing, unexpected = m.load_state_dict(sd, strict=False)
+        tied = {"lm_head.out_proj.weight"}
+        if unexpected or set(missing) - tied:
+            raise RuntimeError(f"stitched checkpoint mismatch: missing {sorted(set(missing) - tied)}, unexpected {sorted(unexpected)}")
+        if missing:
+            m.lm_head.out_proj.weight = m.decoder.embed_tokens.weight
         return m
 
     @staticmethod
@@ -126,8 +134,14 @@ def fit_affine(x: torch.Tensor, y: torch.Tensor, ridge: float = 1e-2) -> tuple[t
     return w.to(x.dtype), b.to(x.dtype)
 
 
-def explained_variance(x: torch.Tensor, y: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> float:
-    """1 - residual variance / total variance of y, over every element (held-out rows)."""
+def explained_variance(x: torch.Tensor, y: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, chunk: int = 32768) -> float:
+    """1 - residual variance / total variance of y, over every element (held-out rows), accumulated in chunks so a
+    wide target (300k rows × 2560 in float64 is 6 GB per tensor) never needs several full-size temporaries at once."""
     w, b = weight.to(x.device, x.dtype), bias.to(x.device, x.dtype)
-    pred = x @ w.T + b
-    return float(1.0 - (y - pred).pow(2).sum() / (y - y.mean(0)).pow(2).sum())
+    mean = y.mean(0)
+    res = tot = torch.zeros((), dtype=torch.float64, device=x.device)
+    for i in range(0, x.shape[0], chunk):
+        xi, yi = x[i:i + chunk], y[i:i + chunk]
+        res = res + (yi - (xi @ w.T + b)).double().pow(2).sum()
+        tot = tot + (yi - mean).double().pow(2).sum()
+    return float(1.0 - res / tot)

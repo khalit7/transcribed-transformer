@@ -1,9 +1,9 @@
-# E3, native reference, size control: T5Gemma 2 270m-270m (adapted from Gemma 3 270M), a third of Gemma 3 1B's
-# non-embedding parameters, under the recipe of configs/e3/t5gemma2-1b-1b.yaml. If it matches the Gemma 3 1B decoder,
+# E4, native, size control: T5Gemma 2 270m-270m (adapted from Gemma 3 270M), a third of Gemma 3 1B's
+# non-embedding parameters, under the recipe of configs/e4/t5gemma2-1b-1b.yaml. If it matches the Gemma 3 1B decoder,
 # parameter count is excluded as the explanation of the 1b-1b margin; if it lands well below, size is part of it.
 # Same 16k cap.
-experiment: e3
-name: e3-t5gemma2-270m-270m
+experiment: e4
+name: e4-t5gemma2-270m-270m
 seed: 0
 data:
   variants: [labelled]

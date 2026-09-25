@@ -1,5 +1,5 @@
 # E1 on Gemma 3 4B (pretrained, multimodal checkpoint; the image tower is frozen and never called), the decoder
-# T5Gemma 2 4b-4b was adapted from: the control for configs/e3/t5gemma2-4b-4b.yaml. E1's recipe unchanged (fp32
+# T5Gemma 2 4b-4b was adapted from: the control for configs/e4/t5gemma2-4b-4b.yaml. E1's recipe unchanged (fp32
 # master weights, sharded across the two GPUs as the Qwen-built E3 was). 16k cap as in the other pairs.
 experiment: e1
 name: e1-gemma3-4b-pt

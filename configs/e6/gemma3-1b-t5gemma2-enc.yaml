@@ -1,8 +1,10 @@
-# E4c: E4b with the decoder frozen (embeddings and head included): only the T5Gemma 2 encoder and the new cross-attention
-# sublayers (with their norms) train, so the task can only be learnt through the encoder path. Everything else as E4b, the
-# single change being model.trainable. Compared against E4b (everything trained) and E1 on the same decoder (fully fine-tuned).
-experiment: e4
-name: e4c-gemma3-1b-t5gemma2-enc-frozen-dec
+# E6 (decoder-only + encoder): the Gemma 3 1B decoder (E1's control for the T5Gemma 2 pair) given the T5Gemma 2 1b-1b text encoder over the
+# prompt through new zero-initialised cross-attention in every layer. The decoder's input is exactly E1's (start token,
+# prompt, answer; self-attention over all of it); at step 0 the model is E1's; whatever changes is the encoder's doing.
+# E1's recipe; the cross-attention gate (the post-norm weight) trains at 100× and the copied projections at 10× so a 2.8k-step
+# fine-tune has a chance to route through the new path; 16k cap as the pair; DDP.
+experiment: e6
+name: e6-gemma3-1b-t5gemma2-enc
 seed: 0
 data:
   variants: [labelled]
@@ -12,7 +14,6 @@ model:
   encoder_base: google/t5gemma-2-1b-1b
   arch: hybrid
   decoder_sees_prompt: true
-  trainable: [encoder, cross]   # substrings of parameter names: the T5Gemma 2 encoder, the cross-attention sublayers and their norms
   attn: flash_attention_2   # the decoder; the T5Gemma 2 encoder has no flash-attention path and runs under sdpa
   gradient_checkpointing: true
 optim:
@@ -28,4 +29,4 @@ val_every: 200
 checkpoint_minutes: 30
 keep_checkpoints: 1
 wandb_project: tt-encdec
-tags: [hybrid, frozen-decoder, decoder-only-plus-encoder, google/gemma-3-1b-pt, google/t5gemma-2-1b-1b, encoder-and-cross-only, decoder-sees-prompt, control-e1-gemma3-1b-pt]
+tags: [hybrid, decoder-only-plus-encoder, google/gemma-3-1b-pt, google/t5gemma-2-1b-1b, full-params, decoder-sees-prompt, control-e1-gemma3-1b-pt]

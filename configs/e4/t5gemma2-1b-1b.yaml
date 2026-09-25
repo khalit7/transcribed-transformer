@@ -1,9 +1,9 @@
-# E3, native reference: T5Gemma 2 1b-1b, Google's encoder-decoder adapted from Gemma 3 1B with about 2T tokens,
+# E4, native: T5Gemma 2 1b-1b, Google's encoder-decoder adapted from Gemma 3 1B with about 2T tokens,
 # fine-tuned with E1's recipe (same data, split, steps, schedule). Not comparable with the Qwen arms (different
 # origin, tokenizer, size); its pair is configs/e1/gemma3-1b-pt.yaml, the decoder it was adapted from, fine-tuned
 # identically. Context capped at the model's native 16k (the benchmark's longest case is 15k tokens).
-experiment: e3
-name: e3-t5gemma2-1b-1b
+experiment: e4
+name: e4-t5gemma2-1b-1b
 seed: 0
 data:
   variants: [labelled]

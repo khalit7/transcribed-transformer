@@ -1,9 +1,9 @@
-# E4 (hybrid): T5Gemma 2 1b-1b with the decoder reading the raw prompt as well (self-attention over start token +
+# E6 (native hybrid): T5Gemma 2 1b-1b with the decoder reading the raw prompt as well (self-attention over start token +
 # prompt + target, loss on the target) while cross-attending to the encoder's states of the same prompt. The
 # model's merged attention already covers both paths, so no new weights. Same recipe, data, split, steps and
-# 16k cap as configs/e3/t5gemma2-1b-1b.yaml; the comparison is against that run and the Gemma 3 1B decoder.
-experiment: e4
-name: e4-t5gemma2-1b-1b-hybrid
+# 16k cap as configs/e4/t5gemma2-1b-1b.yaml; the comparison is against that run and the Gemma 3 1B decoder.
+experiment: e6
+name: e6-t5gemma2-1b-1b-hybrid
 seed: 0
 data:
   variants: [labelled]

@@ -1,11 +1,11 @@
-# E3, native reference at the top of the family: T5Gemma 2 4b-4b (adapted from Gemma 3 4B), E1's recipe (fp32
+# E4, native at the top of the family: T5Gemma 2 4b-4b (adapted from Gemma 3 4B), E1's recipe (fp32
 # master weights, sharded). Its pair is configs/e1/gemma3-4b-pt.yaml. 16k cap.
 # NOT RUNNABLE ON THE LOCAL PAIR OF 32 GB CARDS: 7.5B trainable parameters need about 37 GB per GPU under this
 # recipe across two GPUs (measured 5 bytes/param/GPU at 3.8B). Meant for rented hardware: two 80 GB cards, or four
 # 48 GB (set --nproc_per_node accordingly; resume needs the same world size). The bf16 + stochastic-rounding
 # recipe (optim.weights: bf16_sr, 27.5 GiB at 16k on the local cards) is not used, so the pair stays on one recipe.
-experiment: e3
-name: e3-t5gemma2-4b-4b
+experiment: e4
+name: e4-t5gemma2-4b-4b
 seed: 0
 data:
   variants: [labelled]

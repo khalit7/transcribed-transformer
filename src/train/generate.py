@@ -48,6 +48,8 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--backend", choices=["vllm", "hf", "prefixlm", "encdec", "hf_encdec", "hf_encdec_hybrid", "hybrid", "stitched"], default="vllm")
     ap.add_argument("--batch", type=int, default=16, help="prefixlm backend: sequences per batch")
+    ap.add_argument("--batch-tokens", type=int, default=160_000,
+                    help="stitched backend: encoder-token budget per batch (160k suits a 1B encoder; a 4B encoder needs about 40k)")
     ap.add_argument("--enforce-eager", action="store_true",
                     help="vllm backend: no CUDA graphs (a model whose RoPE cache grows on demand, e.g. Hunyuan's dynamic NTK, cannot be captured)")
     args = ap.parse_args()
@@ -95,7 +97,7 @@ def main() -> None:
             generate_hybrid(args.model_dir, pairs, f, args.max_tokens, args.batch)
     elif args.backend == "stitched":
         with args.out.open("a") as f:
-            generate_stitched(args.model_dir, pairs, f, args.max_tokens, args.batch)
+            generate_stitched(args.model_dir, pairs, f, args.max_tokens, args.batch, args.batch_tokens)
     else:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -316,7 +318,7 @@ def generate_hf_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, m
 
 
 def generate_hf_encdec_hybrid(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 16) -> None:
-    """Greedy decoding for E3h: the encoder reads the prompt; the decoder is prefilled with start token +
+    """Greedy decoding for the E6 native hybrid: the encoder reads the prompt; the decoder is prefilled with start token +
     prompt (left-padded within a length-sorted batch, so padding is a few tokens; explicit position ids start
     at 0 on the first real token) with cross-attention to the encoder states, then decodes the label."""
     import torch
@@ -392,7 +394,7 @@ def generate_hf_encdec_hybrid(model_dir: str, pairs: list[tuple[str, str, str]],
 
 
 def generate_hybrid(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 16) -> None:
-    """Greedy decoding for E4b (src/train/hybrid.py): the encoder reads the prompt once and its keys and values
+    """Greedy decoding for the E6 decoder-only + encoder arm (src/train/hybrid.py): the encoder reads the prompt once and its keys and values
     are cached per layer; the decoder is prefilled with the prompt (its own start token in front, as the prompt
     is tokenised; left-padded within a length-sorted batch; explicit position ids from 0 on the first real
     token) and decodes the label with a growing cache, reading the encoder through cross-attention."""
@@ -467,8 +469,9 @@ def generate_hybrid(model_dir: str, pairs: list[tuple[str, str, str]], out, max_
             print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
 
 
-def generate_stitched(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 16) -> None:
-    """Greedy decoding for E3-mix-and-match (src/train/stitched.py): encoder pass through the stitch once per batch,
+def generate_stitched(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 16,
+                      batch_tokens: int = 160_000) -> None:
+    """Greedy decoding for E4-mix-and-match (src/train/stitched.py): encoder pass through the stitch once per batch,
     then the T5Gemma 2 decoder from its start token with a growing cache, reading the stitched states."""
     import torch
     from transformers import AutoTokenizer, DynamicCache, EncoderDecoderCache
@@ -487,7 +490,7 @@ def generate_stitched(model_dir: str, pairs: list[tuple[str, str, str]], out, ma
     n_batches = 0
     while bi < len(order):
         longest = len(enc_all[order[min(bi + batch, len(order)) - 1]])
-        bs = max(1, min(batch, 160_000 // longest))
+        bs = max(1, min(batch, batch_tokens // longest))
         idx = order[bi:bi + bs]
         bi += bs
         n_batches += 1

@@ -347,10 +347,10 @@ def collate_encdec(examples: list[Example], idx: list[int], pad_id: int, start_i
     """Encoder/decoder batch for E3. Fine-tuning: the prompt goes to the encoder, the target (with its final
     eos) to the decoder, teacher-forced from `start_id`. seq2seq adaptation: a document is cut at a seeded
     random point in `cut`; the encoder reads the first part, the decoder predicts up to max_target tokens
-    of the rest. Both sides right-padded; labels -100 at padding. dec_prompt (E3h): the decoder side is
+    of the rest. Both sides right-padded; labels -100 at padding. dec_prompt (E6 native hybrid): the decoder side is
     `start_id`, the prompt, then the target, with labels only on the target, so the decoder reads the raw
     prompt through self-attention as well as the encoder's states through cross-attention. dec_start=False
-    (E4b, a decoder-only model whose prompt already opens with its start token): no `start_id` is prepended, so
+    (the E6 decoder-only + encoder arm, whose decoder's prompt already opens with its start token): no `start_id` is prepended, so
     the decoder side is the prompt then the target, exactly the decoder's own fine-tuning input."""
     encs, tgts, prefixes = [], [], []
     off = 1 if dec_start else 0

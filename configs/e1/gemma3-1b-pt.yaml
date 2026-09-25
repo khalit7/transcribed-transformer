@@ -1,5 +1,5 @@
 # E1 on Gemma 3 1B (pretrained), the decoder T5Gemma 2 1b-1b was adapted from: the control for
-# configs/e3/t5gemma2-1b-1b.yaml. E1's recipe unchanged; context capped at 16k to match its pair.
+# configs/e4/t5gemma2-1b-1b.yaml. E1's recipe unchanged; context capped at 16k to match its pair.
 experiment: e1
 name: e1-gemma3-1b-pt
 seed: 0
