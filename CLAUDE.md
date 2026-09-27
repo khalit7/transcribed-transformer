@@ -121,6 +121,7 @@ Dual RTX 5090 (Blackwell, sm_120, 32GB each, **no NVLink**, PCIe).
 - Do not oversell. This project's credibility rests on stated limitations being honest.
 - Keep the data sheets current when a dataset is added, removed, or re-scoped.
 - **Experiment records are written in the owner's first person, as decisions and reasoning.** `experiments/` is public and is read as evidence of the owner's research judgement. Write "I switched to full-parameter training so the arm matches E1", never "Khalid asked for ..." or a quote of what the owner typed in a session ("lets do it", "yes do your recommendation"). State the idea or question in its own words, not as a chat transcript. Do not describe the tooling conversation (which assistant proposed what, which account or subscription paid for a run); record only what a reader needs to reproduce the run.
+- **Runs are named, never lettered.** Refer to a run by its slug or by what it is ("the 270M encoder + 4B decoder", `e4mm-270m-enc-4b-dec`), in prose, tables, configs and records alike. Letters or numbers invented for a queue script or a grid ("arm D") mean nothing to a reader and do not enter any file.
 - **Two terms, never swapped.** *LLM labelling* is a model answering a question about a transcript (producing answer, evidence, summary); that model is the **labeller**. *LLM-as-a-judge* is a model assessing how good such an answer is; that model is the **judge**. `src/synthesis` labels; a judge is only ever the grader of labels. Do not call a labeller a judge, in code, prompts, docs or notes.
 
 ## Git

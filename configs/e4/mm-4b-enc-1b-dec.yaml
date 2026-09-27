@@ -1,4 +1,4 @@
-# E4-mix-and-match idea 2, arm E: the T5Gemma 2 4b-4b encoder (2560 wide) with the T5Gemma 2 1b-1b decoder (1152 wide),
+# E4-mix-and-match idea 2, e4mm-4b-enc-1b-dec: the T5Gemma 2 4b-4b encoder (2560 wide) with the T5Gemma 2 1b-1b decoder (1152 wide),
 # joined by an affine stitch on the encoder states fitted by ridge regression onto the 1b encoder's states
 # (checkpoints/stitch/4b-to-1b.pt, not yet fitted: run src/train/fit_stitch.py first), so the decoder reads a familiar input at step 0.
 # ~4.9B parameters: about 1 GB per card over what FSDP with fp32 masters fits at the 16k tail, so the two embedding tables

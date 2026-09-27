@@ -37,6 +37,7 @@ from src.train.data import (
     build_examples,
     build_transcript_examples,
     collate,
+    collate_continuation,
     collate_encdec,
     labelled_doc_ids,
     mask_encoder_side,
@@ -48,6 +49,7 @@ from src.train.data import (
 from src.train.encdec import EncDec
 from src.train.hybrid import Hybrid
 from src.train.masks import FLEX_KERNEL_OPTIONS, prefix_lm_mask
+from src.train.soft import SoftStitched
 from src.train.stitched import Stitched
 
 
@@ -129,6 +131,26 @@ def load_model(cfg: TrainConfig, device: torch.device):
                 n_on, n_off = freeze_named(model, cfg.model.frozen)
                 log(f"frozen {cfg.model.frozen}: {n_on / 1e6:.1f}M parameters train, {n_off / 1e6:.1f}M frozen")
             return tok, shard_stitched(prepare_for_sharding(model, cfg, device)), attn
+        return tok, model.to(device), attn
+    if cfg.model.arch == "soft":
+        if cfg.model.lora_r or cfg.model.sharding == "fsdp":
+            raise SystemExit("soft trains every parameter under DDP; drop lora_r / sharding")
+        if attn == "flash_attention_2":
+            try:
+                import flash_attn  # type: ignore[import-untyped]
+            except ImportError:
+                log("flash_attn not importable; falling back to sdpa")
+                attn = "sdpa"
+        if SoftStitched.is_soft_dir(cfg.model.base):
+            model = SoftStitched.load(cfg.model.base, attn, cfg.model.gradient_checkpointing)
+        else:
+            if not cfg.model.encoder_base:
+                raise SystemExit("soft needs model.encoder_base (the encoder-decoder whose text encoder feeds the decoder); model.base is the decoder")
+            if cfg.model.stitch is None:
+                log("model.stitch not set: the stitch starts random (the decoder reads noise at its prompt positions at step 0)")
+            model = SoftStitched.from_pretrained(cfg.model.base, cfg.model.encoder_base, attn, cfg.model.gradient_checkpointing, cfg.model.stitch)
+        if getattr(model.config, "final_logit_softcapping", None):
+            raise SystemExit("soft: target_loss applies lm_head directly; this decoder's logit softcapping would be skipped")
         return tok, model.to(device), attn
     if cfg.model.arch == "hf_encdec":
         from transformers import AutoConfig, AutoModelForSeq2SeqLM
@@ -346,7 +368,7 @@ def target_loss(model, batch: dict, device: torch.device, prefix_lm: str | None 
     if isinstance(raw, (ShardedHF, ShardedStitched)):
         return raw(batch, device, prefix_lm)  # the root forward: FSDP2 gathers the root's parameters
     labels = batch["labels"].to(device, non_blocking=True)
-    if isinstance(raw, (Hybrid, Stitched)):
+    if isinstance(raw, (Hybrid, Stitched, SoftStitched)):
         hidden = raw(batch["enc_ids"].to(device, non_blocking=True), batch["enc_mask"].to(device, non_blocking=True),
                      batch["dec_ids"].to(device, non_blocking=True), batch["dec_mask"].to(device, non_blocking=True))
         mask = labels != -100
@@ -679,17 +701,18 @@ def main() -> None:
         return mntp_mask(batch, mask_prob, mask_id, seed) if mntp else batch
 
     pad_kw = {"pad_to": 128, "min_len": 256} if prefix_lm else {}
-    encdec = cfg.model.arch in ("encdec", "hf_encdec", "hybrid", "stitched")
+    encdec = cfg.model.arch in ("encdec", "hf_encdec", "hybrid", "stitched", "soft")
     # decoder start token: the tokenizer's <bos> for a native encoder-decoder (what T5Gemma 2 was trained with), eos for E3.
-    # The hybrid's decoder reads the prompt itself (opening with the tokenizer's own start token, as in E1): no extra one
-    hybrid = cfg.model.arch == "hybrid"
+    # The hybrid's decoder reads the prompt itself (opening with the tokenizer's own start token, as in E1): no extra one.
+    # E5's decoder side is the prompt too (its positions carry the stitched encoder states), then the answer.
+    hybrid = cfg.model.arch in ("hybrid", "soft")
     if hybrid and not cfg.model.decoder_sees_prompt:
-        raise SystemExit("hybrid: the decoder reads the prompt; set model.decoder_sees_prompt: true")
+        raise SystemExit(f"{cfg.model.arch}: the decoder side carries the prompt; set model.decoder_sees_prompt: true")
     start_id = tok.bos_token_id if cfg.model.arch in ("hf_encdec", "stitched") and tok.bos_token_id is not None else tok.eos_token_id
     seq2seq = adapt is not None and adapt.objective in ("seq2seq", "mixed")
     mixed = adapt is not None and adapt.objective == "mixed"
-    if seq2seq and not encdec:
-        raise SystemExit("seq2seq/mixed adaptation needs model.arch: encdec")
+    if mixed and not encdec:
+        raise SystemExit("mixed adaptation needs model.arch: encdec")
     if mixed and adapt is not None:
         mask_id = int(tok.convert_tokens_to_ids(adapt.mask_token))
         mask_prob = adapt.mask_prob
@@ -717,6 +740,8 @@ def main() -> None:
                                adapt.max_target if adapt else 2048, adapt.cut if adapt else (0.25, 0.75),
                                dec_prompt=cfg.model.decoder_sees_prompt, dec_start=not hybrid)
             return mask_encoder_side(b, mask_prob, mask_id, seed + 1) if mixed else b
+        if seq2seq and adapt is not None:  # a decoder-only model under the continuation objective (E5's matched control)
+            return prepare(collate_continuation(examples, micro, pad_id, seed, adapt.max_target, adapt.cut, **pad_kw), seed)
         return prepare(collate(examples, micro, pad_id, **pad_kw), seed)
 
     # loss normaliser per step: the group's target tokens, or their expected masked share under MNTP
@@ -926,7 +951,7 @@ def main() -> None:
     elif not args.smoke and rank == 0:
         raw = model.module if isinstance(model, DDP) else model
         final = run_dir / "final"
-        if isinstance(raw, (EncDec, Hybrid, Stitched)):
+        if isinstance(raw, (EncDec, Hybrid, Stitched, SoftStitched)):
             raw.save(final, tok)
         else:
             raw.save_pretrained(final, safe_serialization=True)

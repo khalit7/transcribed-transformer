@@ -1,0 +1,39 @@
+# Adaptation stage for E5+: the soft-token model (T5Gemma 2 1b encoder into the Gemma 3 1B decoder through the regression-fitted
+# stitch, configs/e5/t5gemma2-1b-enc-gemma3-1b.yaml) learns its interface before the task fine-tune. Objective: a training
+# transcript is cut at a seeded point in its middle half; the encoder reads the prefix, the decoder's prefix positions carry
+# the stitched states, and the decoder predicts up to 2,048 tokens of the continuation, loss on the continuation only. Not
+# next-token over the whole document, because the bidirectional encoder would have seen the target. Everything trains, the
+# stitch at 10x; 2 epochs of the 3,164 training transcripts (~198 steps), as the matched control
+# configs/adapt/continuation-gemma3-1b-pt.yaml, which sees the same cuts with the prefix as tokens.
+experiment: e5
+name: adapt-continuation-e5-t5gemma2-1b-enc-gemma3-1b
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-1b-pt                 # the decoder, E1's
+  encoder_base: google/t5gemma-2-1b-1b       # the encoder donor
+  stitch: checkpoints/stitch/1b-to-gemma3-1b-embed.pt
+  arch: soft
+  decoder_sees_prompt: true   # the decoder side is the prefix (as stitched states) then the continuation
+  attn: flash_attention_2
+  gradient_checkpointing: true
+adapt:
+  objective: seq2seq
+  max_target: 2048
+  cut: [0.25, 0.75]
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 20
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 2
+batch_sequences: 32
+micro_tokens: 8192
+val_every: 50
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-pretrain
+tags: [adapt, continuation, soft-tokens, google/gemma-3-1b-pt, enc-google/t5gemma-2-1b-1b]

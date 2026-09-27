@@ -1,0 +1,44 @@
+# Adaptation stage for E5++: the soft-token model (T5Gemma 2 1b encoder into the Gemma 3 1B decoder through the regression-fitted
+# stitch) learns its interface on the outside-text sample the Qwen E1++/E2++ stages used (~131k documents, one epoch, ~4.1k steps)
+# under the continuation objective: a document cut in its middle half, the encoder reads the prefix, the decoder's prefix positions
+# carry the stitched states, up to 2,048 tokens of the continuation predicted, loss on the continuation only (not next-token over
+# the whole document: the bidirectional encoder would have seen the target). Everything trains, stitch at 10x. Matched control:
+# configs/adapt/continuation-corpora-gemma3-1b-pt.yaml, the same cuts with the prefix as tokens. The small-data version on the
+# training transcripts alone is configs/adapt/continuation-e5-t5gemma2-1b-enc-gemma3-1b.yaml (smoked only).
+experiment: e5
+name: adapt-continuation-corpora-e5-t5gemma2-1b-enc-gemma3-1b
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-1b-pt                 # the decoder, E1's
+  encoder_base: google/t5gemma-2-1b-1b       # the encoder donor
+  stitch: checkpoints/stitch/1b-to-gemma3-1b-embed.pt
+  arch: soft
+  decoder_sees_prompt: true   # the decoder side is the prefix (as stitched states) then the continuation
+  attn: flash_attention_2
+  gradient_checkpointing: true
+adapt:
+  objective: seq2seq
+  max_target: 2048
+  cut: [0.25, 0.75]
+  corpora:   # the E1++/E2++ outside-text sample (configs/adapt/causal-corpora-qwen3-1.7b-base.yaml); labelled calls excluded
+    - {path: data/interim/callcenteren/train.jsonl, docs: 88933, val_docs: 100}   # all of it: real call-centre ASR, undiarised
+    - {path: data/interim/sporc/train.jsonl, docs: 35000, val_docs: 40}           # diarised podcasts, long; labelled episodes excluded
+    - {path: data/interim/meetingbank/train.jsonl, docs: 1218, val_docs: 10}      # all: council meetings, long, truncated at 16k
+    - {path: data/interim/courtlistener/train.jsonl, docs: 6400, val_docs: 10}    # all: oral arguments
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 8192
+val_every: 500
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-pretrain
+tags: [adapt, continuation, corpora, soft-tokens, google/gemma-3-1b-pt, enc-google/t5gemma-2-1b-1b]

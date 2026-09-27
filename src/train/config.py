@@ -27,9 +27,12 @@ class ModelConfig(BaseModel):
     # stitched: E4-mix-and-match, src/train/stitched.py: the text encoder of encoder_base with the decoder of base (both
     # T5Gemma 2, different sizes), joined by an affine stitch on the encoder states fitted beforehand (`stitch`,
     # src/train/fit_stitch.py); everything trains, DDP. base may be a Stitched.save dir.
-    arch: Literal["decoder", "encdec", "hf_encdec", "hybrid", "stitched"] = "decoder"
-    encoder_base: str | None = None  # hybrid / stitched: the encoder-decoder checkpoint whose text encoder is used
-    stitch: Path | None = None  # stitched: the fitted map (fit_stitch.py output); None = a fresh random map
+    # soft: E5, src/train/soft.py: the decoder-only model (base) exactly as in E1, reading at its prompt positions the text encoder
+    # of encoder_base mapped into its embedding space by an affine stitch (`stitch`, fit_stitch.py --target-embeddings) instead
+    # of the token embeddings; no new attention; everything trains, DDP. base may be a SoftStitched.save dir.
+    arch: Literal["decoder", "encdec", "hf_encdec", "hybrid", "stitched", "soft"] = "decoder"
+    encoder_base: str | None = None  # hybrid / stitched / soft: the encoder-decoder checkpoint whose text encoder is used
+    stitch: Path | None = None  # stitched / soft: the fitted map (fit_stitch.py output); None = a fresh random map
     # parameter-name substrings that train; everything else is frozen (None: every parameter trains). E6 (frozen decoder): [encoder, cross]
     trainable: list[str] | None = None
     # parameter-name substrings that are frozen, everything else trains (None: nothing frozen); applied after `trainable`.
@@ -79,6 +82,8 @@ class AdaptConfig(BaseModel):
     objective). mntp: masked next-token prediction with bidirectional attention, LLM2Vec-style: a
     share of tokens is replaced by mask_token and each masked token is predicted from the hidden
     state one position before it, loss on masked positions only."""
+    # seq2seq (encdec, soft, or a decoder-only model as the matched control): a document is cut at a seeded point, the
+    # prefix is read (by the encoder, or by the decoder as tokens) and the continuation predicted, loss on the continuation
     objective: Literal["causal", "mntp", "seq2seq", "mixed"]  # mixed: seq2seq + MNTP on the encoder (E3)
     mask_prob: float = 0.2
     mntp_weight: float = 1.0  # mixed: weight of the encoder-side masked loss relative to the seq2seq loss

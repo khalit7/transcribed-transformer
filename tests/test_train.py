@@ -447,3 +447,156 @@ def test_stitched_load_retties_a_head_missing_from_an_fsdp_export(tmp_path, monk
     assert loaded.lm_head.out_proj.weight.data_ptr() == loaded.decoder.embed_tokens.weight.data_ptr()
     assert torch.equal(loaded.decoder.embed_tokens.weight, m.decoder.embed_tokens.weight)
     assert torch.equal(loaded.stitch.weight, m.stitch.weight)
+
+
+def _tiny_soft():
+    import torch
+    from transformers import Gemma3ForCausalLM, Gemma3TextConfig
+    from transformers.models.t5gemma2.configuration_t5gemma2 import T5Gemma2TextConfig
+    from transformers.models.t5gemma2.modeling_t5gemma2 import T5Gemma2TextEncoder
+
+    from src.train.soft import SoftStitched
+    torch.manual_seed(0)
+    dcfg = Gemma3TextConfig(vocab_size=64, hidden_size=32, intermediate_size=48, num_hidden_layers=3, num_attention_heads=2,
+                            num_key_value_heads=1, head_dim=16, sliding_window=4, layer_types=["sliding_attention", "full_attention", "sliding_attention"],
+                            query_pre_attn_scalar=16, attn_implementation="sdpa")
+    dec = Gemma3ForCausalLM(dcfg).eval()
+    ecfg = T5Gemma2TextConfig(vocab_size=64, hidden_size=48, intermediate_size=64, num_hidden_layers=2, num_attention_heads=2,
+                              num_key_value_heads=1, head_dim=16, sliding_window=4, layer_types=["sliding_attention", "full_attention"],
+                              query_pre_attn_scalar=16, attn_implementation="sdpa", dropout_rate=0.0, attention_dropout=0.0)
+    enc = T5Gemma2TextEncoder(ecfg).eval()
+    plain = Gemma3ForCausalLM(dcfg).eval()
+    plain.load_state_dict(dec.state_dict())
+    return SoftStitched(dec, enc, "dec", "enc", "sdpa", gradient_checkpointing=True).eval(), plain
+
+
+def test_soft_replaces_the_prompt_embeddings_only_and_trains_end_to_end():
+    import torch
+    m, plain = _tiny_soft()
+    enc_ids = torch.tensor([[2, 5, 6, 7, 8], [2, 9, 10, 0, 0]]); enc_mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]])
+    dec_ids = torch.tensor([[2, 5, 6, 7, 8, 11, 12], [2, 9, 10, 11, 12, 0, 0]]); dec_mask = torch.tensor([[1] * 7, [1] * 5 + [0, 0]])
+    with torch.no_grad():
+        z = m.encode(enc_ids, enc_mask)
+        assert z.shape == (2, 5, 32)  # 48-wide encoder states mapped to the decoder's 32
+        # with the decoder's own scaled embeddings in place of the stitched states, the model is the plain decoder exactly:
+        # the placement (prompt positions only, real tokens only) and the scaling are what this checks
+        h_same = m.decode(m.inputs(m.embed(enc_ids), enc_mask, dec_ids), dec_mask)
+        ref = plain.model(input_ids=dec_ids, attention_mask=dec_mask).last_hidden_state
+        assert torch.allclose(h_same[dec_mask.bool()], ref[dec_mask.bool()], atol=1e-5)
+        h = m(enc_ids, enc_mask, dec_ids, dec_mask)
+    assert h.shape == (2, 7, 32) and not torch.allclose(h[dec_mask.bool()], ref[dec_mask.bool()], atol=1e-3)
+    # padded encoder positions never reach the decoder: changing them changes nothing
+    enc_ids2 = enc_ids.clone(); enc_ids2[1, 3:] = 33
+    with torch.no_grad():
+        h2 = m(enc_ids2, enc_mask, dec_ids, dec_mask)
+    assert torch.allclose(h[dec_mask.bool()], h2[dec_mask.bool()], atol=1e-5)
+    m.train()
+    out = m(enc_ids, enc_mask, dec_ids, dec_mask)
+    assert torch.allclose(out[dec_mask.bool()], h[dec_mask.bool()], atol=1e-5)  # checkpointing changes no value
+    m.lm_head(out)[dec_mask.bool()].float().pow(2).mean().backward()
+    assert m.stitch.weight.grad.abs().sum() > 0 and m.encoder.layers[0].self_attn.q_proj.weight.grad.abs().sum() > 0
+    assert m.decoder.layers[0].self_attn.q_proj.weight.grad.abs().sum() > 0
+    assert m.decoder.embed_tokens.weight.grad.abs().sum() > 0  # the answer tokens still enter through the embeddings
+
+
+def test_soft_cached_decoding_matches_the_full_forward():
+    import torch
+    from transformers import DynamicCache
+    m, _ = _tiny_soft()
+    enc_ids = torch.tensor([[2, 5, 6, 7, 8], [2, 9, 10, 0, 0]]); enc_mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]])
+    dec_ids = torch.tensor([[2, 5, 6, 7, 8, 11, 12], [2, 9, 10, 11, 12, 0, 0]]); dec_mask = torch.tensor([[1] * 7, [1] * 5 + [0, 0]])
+    with torch.no_grad():
+        full = m(enc_ids, enc_mask, dec_ids, dec_mask)
+        enc = m.encode(enc_ids, enc_mask)
+        # generation's layout: the prompt left-padded, stitched states where the prompt sits, then two answer tokens one at a time
+        lens = enc_mask.sum(1).tolist(); n = max(lens)
+        ids = torch.full((2, n), 0, dtype=torch.long); mask = torch.zeros((2, n), dtype=torch.long); pos = torch.zeros((2, n), dtype=torch.long)
+        emb = m.embed(ids)
+        for r, ln in enumerate(lens):
+            ids[r, n - ln:] = enc_ids[r, :ln]; mask[r, n - ln:] = 1; pos[r, n - ln:] = torch.arange(ln)
+        emb = m.embed(ids)
+        for r, ln in enumerate(lens):
+            emb[r, n - ln:] = enc[r, :ln]
+        cache = DynamicCache(config=m.config)
+        h = m.decode(emb, mask, pos, cache)
+        steps = [h[:, -1]]
+        nxt_pos = pos[:, -1] + 1
+        for t in (11, 12):
+            mask = torch.cat([mask, torch.ones((2, 1), dtype=torch.long)], 1)
+            h = m.decode(m.embed(torch.full((2, 1), t)), mask, nxt_pos[:, None], cache)
+            steps.append(h[:, -1]); nxt_pos = nxt_pos + 1
+    for r, ln in enumerate(lens):  # prefill's last state = the last prompt position; then the two answer positions
+        assert torch.allclose(steps[0][r], full[r, ln - 1], atol=1e-4)
+        assert torch.allclose(steps[1][r], full[r, ln], atol=1e-4)
+        assert torch.allclose(steps[2][r], full[r, ln + 1], atol=1e-4)
+
+
+def test_soft_save_and_load_round_trip(tmp_path, monkeypatch):
+    import torch
+
+    from src.train import soft as soft_mod
+    m, _ = _tiny_soft()
+    m.save(tmp_path / "final")
+    fresh, _ = _tiny_soft()
+    torch.nn.init.normal_(fresh.stitch.weight)
+    monkeypatch.setattr(soft_mod.SoftStitched, "from_pretrained", classmethod(lambda cls, *a, **k: fresh))
+    loaded = soft_mod.SoftStitched.load(tmp_path / "final")
+    assert torch.equal(loaded.stitch.weight, m.stitch.weight) and soft_mod.SoftStitched.is_soft_dir(tmp_path / "final")
+
+
+def test_soft_stitch_fit_onto_embeddings_starts_the_decoder_near_its_own_input():
+    """The E5 stitch is fitted onto the decoder's scaled embeddings of the same tokens: on a synthetic encoder whose
+    states are an affine function of those embeddings, the fitted map recovers them and the soft model equals the plain
+    decoder."""
+    import torch
+
+    from src.train.stitched import fit_affine
+    m, plain = _tiny_soft()
+    torch.manual_seed(1)
+    a = torch.randn(48, 32); c = torch.randn(48)
+    ids = torch.randint(3, 64, (400,))
+    target = m.embed(ids).detach()
+    source = target @ a.T + c  # what a 48-wide "encoder" would emit for these tokens
+    w, b = fit_affine(source, target, ridge=1e-6)
+    with torch.no_grad():
+        m.stitch.weight.copy_(w); m.stitch.bias.copy_(b)
+    dec_ids = torch.tensor([[2, 5, 6, 7, 8, 11, 12]]); dec_mask = torch.ones_like(dec_ids)
+    enc_ids = dec_ids[:, :5]; enc_mask = torch.ones_like(enc_ids)
+    with torch.no_grad():
+        states = m.embed(enc_ids) @ a.T + c
+        h = m.decode(m.inputs(m.stitch(states), enc_mask, dec_ids), dec_mask)
+        ref = plain.model(input_ids=dec_ids, attention_mask=dec_mask).last_hidden_state
+    assert torch.allclose(h, ref, atol=1e-3)
+
+
+def test_collate_continuation_matches_the_seq2seq_cuts_and_supervises_the_continuation_only():
+    import torch
+
+    from src.train.data import (
+        collate_continuation,
+        collate_encdec,
+        seq2seq_target_count,
+    )
+    ex = [Example(id="a", variant="c", input_ids=np.arange(10, 30, dtype=np.int32), n_prompt=0),
+          Example(id="b", variant="c", input_ids=np.arange(100, 108, dtype=np.int32), n_prompt=0)]
+    b = collate_continuation(ex, [0, 1], pad_id=0, seed=1, max_target=3, cut=(0.5, 0.5))
+    # document a is cut at 10: prefix 10..19 as tokens, continuation capped at 3 tokens (20, 21, 22), loss there only
+    assert b["input_ids"][0].tolist()[:13] == list(range(10, 23)) and b["prompt_len"][0] == 10
+    assert b["labels"][0].tolist()[:13] == [-100] * 10 + [20, 21, 22] and b["labels"][0, 13:].eq(-100).all()
+    assert int((b["labels"] != -100).sum()) == seq2seq_target_count(ex, [0, 1], 1, 3, (0.5, 0.5))
+    # the same cut points as the encoder-decoder objective, so the two arms see the same continuation
+    s = collate_encdec(ex, [0, 1], pad_id=0, start_id=999, seed=1, seq2seq=True, max_target=3, cut=(0.5, 0.5))
+    assert torch.equal(s["labels"][:, :3], b["labels"][:, 10:13][:, :3]) or s["labels"][0].tolist()[:3] == [20, 21, 22]
+
+
+def test_collate_encdec_seq2seq_with_the_prefix_on_the_decoder_side():
+    from src.train.data import collate_encdec
+    ex = [Example(id="a", variant="c", input_ids=np.arange(10, 30, dtype=np.int32), n_prompt=0)]
+    # E5's adaptation layout: encoder reads the prefix, the decoder side is the prefix (its positions carry the
+    # stitched states) then the continuation, no start token, labels on the continuation only
+    s = collate_encdec(ex, [0], pad_id=0, start_id=999, seed=1, seq2seq=True, max_target=3, cut=(0.5, 0.5), dec_prompt=True, dec_start=False)
+    assert s["enc_ids"][0].tolist() == list(range(10, 20)) and s["enc_mask"][0].sum() == 10
+    assert s["dec_ids"][0].tolist() == list(range(10, 20)) + [20, 21] and s["labels"][0].tolist() == [-100] * 9 + [20, 21, 22]
+    # without dec_prompt (the Qwen E3 adaptation) the decoder side is the start token and the continuation, as before
+    q = collate_encdec(ex, [0], pad_id=0, start_id=999, seed=1, seq2seq=True, max_target=3, cut=(0.5, 0.5))
+    assert q["dec_ids"][0].tolist() == [999, 20, 21] and q["labels"][0].tolist() == [20, 21, 22]

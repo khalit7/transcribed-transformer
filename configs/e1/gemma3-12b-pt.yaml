@@ -1,0 +1,32 @@
+# E1 on Gemma 3 12B (pretrained, multimodal checkpoint; the image tower is frozen and never called): the next decoder-only size in the
+# family above the 4B control (Gemma 3 has 270M, 1B, 4B, 12B and 27B; there is no 8B, and T5Gemma 2 stops at 4b-4b, so this decoder
+# has no native encoder-decoder pair). Its role: the top of the decoder-scaling curve (270M 0.446, 1B 0.651, 4B 0.778 clean macro-F1)
+# against which the encoder-heavy arms are read. E1's recipe unchanged (fp32 master weights, 8-bit AdamW, sharded), 16k cap.
+# NOT RUNNABLE ON THE LOCAL PAIR OF 32 GB CARDS: about 12B trainable parameters; the recipe measured 5 bytes/param/GPU sharded over two
+# GPUs at 3.8B, so two 80 GB cards would hold about 60 GB of state each before activations and four 80 GB cards about 30 GB
+# (set --nproc_per_node to the card count; resume needs the same world size). Inference in bf16 (about 24 GB of weights) needs the
+# generation to run with tensor parallelism over the two local cards or on the rented card.
+experiment: e1
+name: e1-gemma3-12b-pt
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-12b-pt
+  sharding: fsdp
+  attn: flash_attention_2
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 8192
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-decoder
+tags: [google/gemma-3-12b-pt, full-params, decoder-scaling, rented]

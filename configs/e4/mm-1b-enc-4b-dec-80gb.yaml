@@ -1,0 +1,34 @@
+# E4-mix-and-match idea 2, e4mm-1b-enc-4b-dec on rented hardware: the T5Gemma 2 1b-1b encoder (1152 wide) with the T5Gemma 2 4b-4b decoder (2560 wide),
+# joined by an affine stitch on the encoder states fitted by ridge regression onto the 4b encoder's states
+# (checkpoints/stitch/1b-to-4b.pt, not yet fitted: run src/train/fit_stitch.py first), so the decoder reads a familiar input at step 0.
+# ~4.6B parameters, the exact recipe (every parameter trains, no sharding) for a single 80 GB card; the mirror of mm-4b-enc-1b-dec-80gb.yaml.
+# Grid: the 4B-decoder column has the 270M encoder (e4mm-270m-enc-4b-dec, 0.733 / 0.585); this adds the 1B encoder to it, so the encoder
+# axis is read at a fixed 4B decoder as it was at the fixed 270M decoder (270M, 1B, 4B encoders).
+experiment: e4
+name: e4mm-1b-enc-4b-dec-80gb
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/t5gemma-2-4b-4b           # the decoder donor
+  encoder_base: google/t5gemma-2-1b-1b   # the encoder donor
+  stitch: checkpoints/stitch/1b-to-4b.pt
+  arch: stitched
+  attn: sdpa
+  sharding: ddp   # one 80 GB card, no sharding
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-encdec
+tags: [mix-and-match, stitched, enc-google/t5gemma-2-1b-1b, dec-google/t5gemma-2-4b-4b, full-params, grid-1b-enc-4b-dec, rented-80gb]

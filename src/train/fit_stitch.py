@@ -3,6 +3,12 @@
     uv run python -m src.train.fit_stitch --source google/t5gemma-2-1b-1b --target google/t5gemma-2-270m-270m \
         --out checkpoints/stitch/1b-to-270m.pt
 
+Or, for E5 (`--target-embeddings`), onto a decoder-only model's scaled token embeddings of the same tokens, so the
+decoder reads something like its own input at step 0:
+
+    uv run python -m src.train.fit_stitch --source google/t5gemma-2-270m-270m --target google/gemma-3-1b-pt \
+        --target-embeddings --out checkpoints/stitch/270m-to-gemma3-1b-embed.pt
+
 Both text encoders run over the same training prompts (the encoder's input at fine-tuning time: transcript and
 question, tokenised as the loop does; the two models share the Gemma tokenizer), their final states are paired
 token by token, and ridge regression from running moments (`AffineMoments`) gives the map; held-out prompts give the explained variance,
@@ -30,6 +36,23 @@ def encoder_of(base: str, attn: str, device):
     return enc
 
 
+class EmbeddingTarget(torch.nn.Module):
+    """A decoder-only model's token embedding as the target "encoder": its (scaled) embedding of each token, so the
+    stitch maps an encoder state onto what the decoder would have read at that position."""
+
+    def __init__(self, base: str):
+        super().__init__()
+        from transformers import AutoModelForCausalLM
+        lm = AutoModelForCausalLM.from_pretrained(base, dtype=torch.bfloat16)
+        self.embed = lm.model.embed_tokens  # Gemma 3 scales inside the module; the rest of the model is dropped
+        self.config = lm.config
+        del lm
+
+    def forward(self, input_ids, attention_mask=None):
+        from transformers.modeling_outputs import BaseModelOutput
+        return BaseModelOutput(last_hidden_state=self.embed(input_ids))
+
+
 @torch.no_grad()
 def states(enc, ids: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     h = enc(input_ids=ids, attention_mask=mask).last_hidden_state
@@ -40,6 +63,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", required=True, help="encoder whose states are mapped (the donor encoder)")
     ap.add_argument("--target", required=True, help="encoder-decoder whose decoder will read the mapped states")
+    ap.add_argument("--target-embeddings", action="store_true",
+                    help="E5: the target is a decoder-only model and the states map onto its token embeddings (soft tokens)")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--train", type=Path, default=Path("data/labelled_data/train.jsonl"))
     ap.add_argument("--tokens", type=int, default=3_000_000, help="fit tokens (held-out: a tenth as many)")
@@ -54,7 +79,8 @@ def main() -> None:
     ex, _ = build_examples(args.train, tok, ["labelled"], 16384, Path("data/interim/sft"))
     ex = [e for e in ex if e.n_prompt <= args.max_len]
     random.Random(args.seed).shuffle(ex)
-    src, tgt = encoder_of(args.source, args.attn, device), encoder_of(args.target, args.attn, device)
+    src = encoder_of(args.source, args.attn, device)
+    tgt = EmbeddingTarget(args.target).to(device).eval() if args.target_embeddings else encoder_of(args.target, args.attn, device)
     d_in, d_out = src.config.hidden_size, tgt.config.hidden_size
     pad = tok.pad_token_id
     t0 = time.time()
@@ -90,8 +116,9 @@ def main() -> None:
     ev = explained_variance(xh.double().to(device), yh.double().to(device), w, b)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"weight": w.float().cpu(), "bias": b.float().cpu(), "source": args.source, "target": args.target,
+                "target_embeddings": args.target_embeddings,
                 "explained_variance_heldout": ev, "fit_tokens": moments.n, "ridge": args.ridge}, args.out)
-    report = {"source": args.source, "target": args.target, "d_in": d_in, "d_out": d_out, "fit_tokens": moments.n,
+    report = {"source": args.source, "target": args.target, "target_embeddings": args.target_embeddings, "d_in": d_in, "d_out": d_out, "fit_tokens": moments.n,
               "heldout_tokens": int(xh.shape[0]), "explained_variance_heldout": round(ev, 4),
               "ridge": args.ridge, "seconds": round(time.time() - t0)}
     args.out.with_suffix(".json").write_text(json.dumps(report, indent=1))

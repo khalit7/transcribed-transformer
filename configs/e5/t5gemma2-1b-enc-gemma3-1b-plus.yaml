@@ -1,0 +1,31 @@
+# E5+ (soft tokens, 1b encoder, adapted): the E5 fine-tune (configs/e5/t5gemma2-1b-enc-gemma3-1b.yaml, 0.647 / 0.477 against
+# the control's 0.651 / 0.496) started from the continuation-adapted checkpoint
+# (configs/adapt/continuation-e5-t5gemma2-1b-enc-gemma3-1b.yaml: encoder, stitch and decoder after ~198 steps of learning to
+# read the prefix through the soft tokens). Read against E1+ on the same decoder (configs/e1/gemma3-1b-pt-plus.yaml), adapted
+# on the same cuts with the prefix as tokens: the interface-adapted test of "does an encoder in front help".
+experiment: e5
+name: e5plus-t5gemma2-1b-enc-gemma3-1b
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: checkpoints/adapt-continuation-e5-t5gemma2-1b-enc-gemma3-1b/final   # a SoftStitched.save dir: encoder, stitch and decoder
+  arch: soft
+  decoder_sees_prompt: true
+  attn: flash_attention_2
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 8192
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-encdec
+tags: [soft-tokens, adapted, google/gemma-3-1b-pt, enc-google/t5gemma-2-1b-1b, full-params, control-e1plus-gemma3-1b-pt]

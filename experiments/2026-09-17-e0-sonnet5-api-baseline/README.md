@@ -24,7 +24,7 @@ The README's E0 row: a frontier model behind an API, given the same prompt and t
 
 ## Result
 
-Stopped on 2026-09-22 at 28,892 of 38,220 requests, generation file intact and resumable; not scored. Run history: 8 workers from 00:53 on 2026-09-17, cut to 2 workers at 10:13 after hitting the subscription's usage limits a second time; the machine rebooted on 2026-09-19 with 24,298 of 38,220 requests done; relaunched 2026-09-20 with one worker and paused and resumed several times since, once after a full disk (one truncated record dropped). About thirty usage-limit pauses so far, the longest 202 minutes. Every completed request is on disk; a relaunch resumes from there. Numbers: TBD until the run completes; I stopped it on 2026-09-22 to keep the subscription window for other work.
+Stopped again on 2026-09-26 12:04 at 29,641 of 38,220 requests after a one-worker resume from 28,892 at 11:00 (749 requests in an hour, no usage-limit waits); generation file intact and resumable; not yet scored. Run history: 8 workers from 00:53 on 2026-09-17, cut to 2 workers at 10:13 after hitting the subscription's usage limits a second time; the machine rebooted on 2026-09-19 with 24,298 of 38,220 requests done; relaunched 2026-09-20 with one worker and paused and resumed several times since, once after a full disk (one truncated record dropped). About thirty usage-limit pauses so far, the longest 202 minutes. Every completed request is on disk; a relaunch resumes from there. Numbers: TBD until the run completes; I stopped it on 2026-09-22 to keep the subscription window for other work resumed it on 2026-09-26 with one worker and stopped it again an hour later at 29,641.
 
 ## Verdict
 

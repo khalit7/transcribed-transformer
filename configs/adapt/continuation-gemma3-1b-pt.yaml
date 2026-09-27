@@ -1,0 +1,32 @@
+# Adaptation stage for E1+ on Gemma 3 1B, the matched control of E5+'s adaptation: the same continuation objective on the same
+# training transcripts with the same seeded cut points (a document is cut in its middle half; the decoder reads the prefix as
+# tokens and predicts up to 2,048 tokens of the continuation, loss on the continuation only), so the two adapted arms differ in
+# exactly one thing: whether the prefix enters as tokens or as the encoder's states. Budget as the Qwen E1+ stage: 2 epochs of
+# the 3,164 training transcripts, ~198 steps. E1's recipe otherwise; 16k cap as the Gemma arms.
+experiment: e1
+name: adapt-continuation-gemma3-1b-pt
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-1b-pt
+  attn: flash_attention_2
+  gradient_checkpointing: true
+adapt:
+  objective: seq2seq
+  max_target: 2048
+  cut: [0.25, 0.75]
+optim:
+  lr: 1.0e-5
+  warmup_steps: 20
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 2
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 50
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-pretrain
+tags: [adapt, continuation, google/gemma-3-1b-pt, control-e5plus]

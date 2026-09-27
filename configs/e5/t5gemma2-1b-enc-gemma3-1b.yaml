@@ -1,0 +1,34 @@
+# E5 (soft tokens), the 1B encoder: the Gemma 3 1B decoder exactly as E1 fine-tuned it (control configs/e1/gemma3-1b-pt.yaml), reading at its
+# prompt positions the T5Gemma 2 1b-1b text encoder (1152 wide) mapped into its embedding space (1152 wide) by an affine stitch instead of
+# the token embeddings; the answer tokens enter through the ordinary embeddings; no new attention. The stitch is fitted by ridge regression
+# onto the decoder's scaled token embeddings (checkpoints/stitch/1b-to-gemma3-1b-embed.pt, held-out explained variance 0.636 against the
+# 270m stitch's 0.620). Follow-up to the 270m arm (0.636 / 0.461 against the control's 0.651 / 0.496): the run that separates "the encoder
+# was too small" from "soft tokens do not help this decoder". E1's recipe; 2.0B trainable, so 8k micro-batches as the E6 hybrid needed at 2.08B.
+experiment: e5
+name: e5-t5gemma2-1b-enc-gemma3-1b
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-1b-pt                 # the decoder, E1's
+  encoder_base: google/t5gemma-2-1b-1b   # the encoder donor
+  stitch: checkpoints/stitch/1b-to-gemma3-1b-embed.pt
+  arch: soft
+  decoder_sees_prompt: true   # the decoder side is the prompt (as stitched states) then the answer
+  attn: flash_attention_2   # the decoder; the T5Gemma 2 encoder has no flash-attention path and runs under sdpa
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 8192    # 2.3B trainable with fp32 masters: the E6 hybrid at 2.08B ran out of memory at 16k
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-encdec
+tags: [soft-tokens, google/gemma-3-1b-pt, enc-google/t5gemma-2-1b-1b, full-params, control-e1-gemma3-1b-pt]

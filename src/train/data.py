@@ -351,14 +351,16 @@ def collate_encdec(examples: list[Example], idx: list[int], pad_id: int, start_i
     `start_id`, the prompt, then the target, with labels only on the target, so the decoder reads the raw
     prompt through self-attention as well as the encoder's states through cross-attention. dec_start=False
     (the E6 decoder-only + encoder arm, whose decoder's prompt already opens with its start token): no `start_id` is prepended, so
-    the decoder side is the prompt then the target, exactly the decoder's own fine-tuning input."""
+    the decoder side is the prompt then the target, exactly the decoder's own fine-tuning input. Under seq2seq with
+    dec_prompt (E5's adaptation stage) the decoder side is the document prefix then the continuation: the encoder reads
+    the prefix, the decoder's prefix positions carry its states, and the loss is on the continuation only."""
     encs, tgts, prefixes = [], [], []
     off = 1 if dec_start else 0
     cuts = seq2seq_cuts(examples, idx, seed, max_target, cut) if seq2seq else [examples[i].n_prompt for i in idx]
     for i, c in zip(idx, cuts):
         ids = examples[i].input_ids
         encs.append(ids[:c]); tgts.append(ids[c:c + max_target] if seq2seq else ids[c:])
-        prefixes.append(ids[:c] if dec_prompt and not seq2seq else ids[:0])
+        prefixes.append(ids[:c] if dec_prompt else ids[:0])
     ne = max(len(x) for x in encs); nt = max(off + len(p) + len(x) - 1 for p, x in zip(prefixes, tgts))
     enc_ids = torch.full((len(idx), ne), pad_id, dtype=torch.long); enc_mask = torch.zeros((len(idx), ne), dtype=torch.long)
     dec_ids = torch.full((len(idx), nt), pad_id, dtype=torch.long); dec_mask = torch.zeros((len(idx), nt), dtype=torch.long)
@@ -415,6 +417,18 @@ def plan_epoch(examples: list[Example], batch_sequences: int, micro_tokens: int,
             micro.append(packed)
         steps.append(Step(micro=micro, target_tokens=sum(examples[i].n_target for i in group)))
     return steps
+
+
+def collate_continuation(examples: list[Example], idx: list[int], pad_id: int, seed: int, max_target: int = 2048,
+                         cut: tuple[float, float] = (0.25, 0.75), pad_to: int = 1, min_len: int = 1) -> dict[str, torch.Tensor]:
+    """The seq2seq adaptation objective for a decoder-only model (the matched control of E5's adaptation stage): each
+    document is cut at the same seeded point `collate_encdec(seq2seq=True)` would use, the decoder reads the prefix as
+    tokens and predicts up to max_target tokens of the continuation, loss on the continuation only. Same cut points,
+    same supervised tokens (`seq2seq_target_count`), so the two arms differ only in how the prefix enters."""
+    cuts = seq2seq_cuts(examples, idx, seed, max_target, cut)
+    cut_examples = [Example(id=examples[i].id, variant=examples[i].variant, input_ids=examples[i].input_ids[:c + max_target], n_prompt=c)
+                    for i, c in zip(idx, cuts)]
+    return collate(cut_examples, list(range(len(cut_examples))), pad_id, pad_to, min_len)
 
 
 def collate(examples: list[Example], idx: list[int], pad_id: int, pad_to: int = 1, min_len: int = 1) -> dict[str, torch.Tensor]:

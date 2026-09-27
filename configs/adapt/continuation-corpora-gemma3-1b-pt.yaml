@@ -1,0 +1,37 @@
+# Adaptation stage for E1++ on Gemma 3 1B, the matched control of E5++'s adaptation: the continuation objective (a document cut in its
+# middle half, the prefix read as tokens, up to 2,048 tokens of the continuation predicted, loss on the continuation only) on the
+# outside-text sample the Qwen E1++/E2++ stages used (~131k documents, one epoch, ~4.1k steps), so the two adapted arms differ in
+# exactly one thing: whether the prefix enters as tokens or as the encoder's states. The small-data version on the training
+# transcripts alone is configs/adapt/continuation-gemma3-1b-pt.yaml (run 2026-09-26, 0.18 h; its fine-tune was not run).
+experiment: e1
+name: adapt-continuation-corpora-gemma3-1b-pt
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-1b-pt
+  attn: flash_attention_2
+  gradient_checkpointing: true
+adapt:
+  objective: seq2seq
+  max_target: 2048
+  cut: [0.25, 0.75]
+  corpora:   # the E1++/E2++ outside-text sample (configs/adapt/causal-corpora-qwen3-1.7b-base.yaml); labelled calls excluded
+    - {path: data/interim/callcenteren/train.jsonl, docs: 88933, val_docs: 100}   # all of it: real call-centre ASR, undiarised
+    - {path: data/interim/sporc/train.jsonl, docs: 35000, val_docs: 40}           # diarised podcasts, long; labelled episodes excluded
+    - {path: data/interim/meetingbank/train.jsonl, docs: 1218, val_docs: 10}      # all: council meetings, long, truncated at 16k
+    - {path: data/interim/courtlistener/train.jsonl, docs: 6400, val_docs: 10}    # all: oral arguments
+optim:
+  lr: 1.0e-5
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 500
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-pretrain
+tags: [adapt, continuation, corpora, google/gemma-3-1b-pt, control-e5pp]

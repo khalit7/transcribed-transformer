@@ -1,0 +1,35 @@
+# E5 (soft tokens): the Gemma 3 1B decoder exactly as E1 fine-tuned it (control configs/e1/gemma3-1b-pt.yaml), reading at its prompt
+# positions the T5Gemma 2 270m-270m text encoder (640 wide) mapped into its embedding space (1152 wide) by an affine stitch, instead
+# of the token embeddings; the answer tokens enter through the ordinary embeddings. No new attention weights: the decoder reads the
+# encoder through its own self-attention. The stitch is fitted by ridge regression onto the decoder's scaled token embeddings of the
+# same tokens (checkpoints/stitch/270m-to-gemma3-1b-embed.pt, src/train/fit_stitch.py --target-embeddings), so at step 0 the decoder
+# reads something like its own input. E1's recipe (16k cap, DDP, flash-attention on the decoder); the stitch at 10× the base rate as in
+# mix-and-match. The same-decoder test of "does an encoder in front help"; the 1B encoder is the follow-up if this shows something.
+experiment: e5
+name: e5-t5gemma2-270m-enc-gemma3-1b
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-1b-pt                 # the decoder, E1's
+  encoder_base: google/t5gemma-2-270m-270m   # the encoder donor
+  stitch: checkpoints/stitch/270m-to-gemma3-1b-embed.pt
+  arch: soft
+  decoder_sees_prompt: true   # the decoder side is the prompt (as stitched states) then the answer
+  attn: flash_attention_2   # the decoder; the T5Gemma 2 encoder has no flash-attention path and runs under sdpa
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-encdec
+tags: [soft-tokens, google/gemma-3-1b-pt, enc-google/t5gemma-2-270m-270m, full-params, control-e1-gemma3-1b-pt]
