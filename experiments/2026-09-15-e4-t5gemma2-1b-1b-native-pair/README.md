@@ -32,6 +32,8 @@ This is a matched pair from one family, not a comparison with the Qwen arms: T5G
 
 ## Result
 
+> **The numbers below come from a run with a bug and are being replaced.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients (each rank trained its own replica on its half of every step; rank 0's was saved), so these are for a model trained on half the data at an effective batch of 16. The run is in the re-run queue under the fixed loop ([the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)); its replacement's numbers replace these when scored.
+
 **T5Gemma 2 1b-1b** (attempt 3, 2026-09-16 05:02 → 09:48, 4.77 h, 2,858 steps; generation 2.6 h on two GPUs through the library's generate; scored 12:23). Val loss 1.458 → 0.831 (200) → 0.680 (1000) → 0.571 (2000) → 0.529 (2858). Benchmark, read from `checkpoints/e4-t5gemma2-1b-1b/eval/benchmark/results.md` (also logged to the wandb run under `bench/*`), with E1 (Qwen3-1.7B-Base, different family, context only) and E2++ beside it:
 
 | variant / slice | metric | T5Gemma 2 1b-1b | Gemma 3 1B (control) | E1 Qwen3-1.7B | E2++ |
@@ -69,6 +71,8 @@ For the README's E4 row: the native reference is now the strongest trained model
 
 ## Size control: T5Gemma 2 270m-270m (added 2026-09-16, before its run)
 
+> **Buggy run, being re-run** (the 2026-09-28 DDP bug; see the note under Result).
+
 A confound in the pair result: the 1b-1b has the most parameters of the models compared, so size alone may explain part of the gap. Against its control it does have twice the non-embedding parameters (1.40B against 0.70B); against E1 it is parameter-matched (1.41B), and per prompt token it costs what Gemma 3 1B costs, since only the encoder reads the prompt. The cheap test: T5Gemma 2 270m-270m (encoder and decoder each 18 layers, hidden 640; about 0.2B non-embedding parameters in total, under a third of Gemma 3 1B's 0.70B) under the identical recipe, `configs/e4/t5gemma2-270m-270m.yaml`.
 
 - **Prediction.** If the 1b-1b margin is architecture plus adaptation rather than size, the 270m-270m lands at or above Gemma 3 1B on unseen-question macro-F1 on both variants (0.496 clean, 0.493 messy) and above the majority predictor there (0.582 / 0.572). **Size is confirmed as part of the explanation if** the 270m-270m falls clearly below the 1B decoder on unseen questions on both variants; a result between the control and the 1b-1b is the mixed case and gets reported as such.
@@ -91,6 +95,8 @@ A confound in the pair result: the 1b-1b has the most parameters of the models c
 
 ## The small pair: Gemma 3 270M control (added 2026-09-16 23:00, before its run)
 
+> **Buggy runs, being re-run** (both sides of this pair; the 2026-09-28 DDP bug).
+
 Next: run the decoder-only version of every model that has an encoder-decoder twin. Three same-family pairs (270m, 1b, 4b) make the pair result a scale trend. First the small one: `google/gemma-3-270m` (text-only pretrained decoder, the origin of the 270m-270m; 18 layers, hidden 640, about 0.1B non-embedding parameters) under `configs/e1/gemma3-270m.yaml`, E1's recipe, 16k cap.
 
 - **Prediction.** The small pair repeats the shape of the large one: the 270m-270m above the 270M decoder on evidence F1 (by at least 0.03 on both variants) and on format validity, with answers close (within 0.02 macro-F1 either way) and both below the majority predictor on unseen questions. **Disconfirmed if** the 270M decoder matches or beats the 270m-270m on evidence F1 on both variants, which would mean the encoder-decoder's evidence advantage at 1b-1b was a one-off. If the decoder clears the majority predictor on unseen questions while the 270m-270m does not, the "size buys transfer" reading of the 1b-1b result is wrong and gets rewritten.
@@ -109,6 +115,8 @@ Next: run the decoder-only version of every model that has an encoder-decoder tw
 The 270M decoder collapses under greedy decoding: 35.9% of its benchmark outputs are runaway evidence lists that count line numbers upward until the 512-token cap (13,714 of 38,220), and the rest is scored as is. Overall macro-F1 is below the majority predictor (0.446 vs 0.592). The prediction ("answers close, evidence advantage of at least 0.03, both below majority on unseen") is confirmed on the evidence and format half and exceeded on answers: the encoder-decoder is ahead by 0.21 macro-F1 and 0.28 evidence F1, and it is the only one of the two above chance overall. The runaway share of the other decoders for reference: Gemma 3 1B about 4.5% invalid, E1 1.4%.
 
 ## The large pair: Gemma 3 4B and T5Gemma 2 4b-4b (added 2026-09-17 00:15; revised 00:30)
+
+> **Comparators affected by a bug.** The Gemma 3 4B run trained under FSDP and stands; every 1B, 270M and Qwen3 arm it is compared with here is a buggy DDP run (the 2026-09-28 audit), so these comparisons are void until the re-runs land.
 
 Next: test the result at a larger scale, full-parameter. The 4b-4b's 7.5B parameters do not fit E1's recipe (fp32 master weights) on two 32 GB cards: about 37 GB per GPU sharded. The first plan put both 4B arms on a bf16 + stochastic-rounding recipe (`optim.weights: bf16_sr`) and re-ran the 270m-270m under it as a check. That check, stopped at step 230, showed the recipes are **not** equivalent: val loss 0.922 at step 200 against 1.015 under fp32 masters (identical 2.026 at step 0), training loss lower from step 50 on. **Decision (00:25): every run stays on E1's recipe; the 4b-4b goes to rented hardware** (two 80 GB or four 48 GB cards) under the same recipe. Gemma 3 4B runs locally under E1's recipe, sharded as the Qwen-built E3 was.
 
@@ -136,6 +144,8 @@ Val split: macro-F1 0.820 / 0.777, evidence F1 0.737 / 0.687. The strongest trai
 **Recipe observation, parked.** The stopped check (`checkpoints/e4-t5gemma2-270m-270m-bf16sr-stopped/`, tt-encdec run) is the only measurement of the precision recipe's effect on this task: at lr 1e-5, bf16 weights with stochastic rounding trained faster than bf16 weights with fp32 masters over the first 230 steps of the 270m-270m. Not benchmarked, not explained; a plausible mechanism is that most single updates at this learning rate are below bf16's resolution and reach the weights only once accumulated under the master-copy recipe. Worth a full run at some point; not part of the pair design.
 
 ## Parameter-matched decoder controls: Qwen2.5-1.5B and Hunyuan-1.8B (added 2026-09-20, before the runs)
+
+> **Buggy runs, being re-run** (both controls and the 1b-1b they are read against; the Qwen3 arm is a buggy run that is not being re-run; the 2026-09-28 DDP bug).
 
 The SmolLM3 run turned out to be an upper bracket rather than a match, so the next step was a parameter-matched comparison: decoder-only models the size of the 1b-1b, ready to fine-tune under E1's recipe. From a sixteen-candidate survey (notes §6) the two ready ones at the 1b-1b's size: **Qwen2.5-1.5B** (1.31B non-embedding against the 1b-1b's 1.40B; same vendor as E1's Qwen3-1.7B, previous generation) and **Hunyuan-1.8B-Pretrain** (1.54B; a third family, 256k native context). Both under E1's recipe unchanged (`configs/e1/qwen2.5-1.5b.yaml`, `configs/e1/hunyuan-1.8b.yaml`), DDP, 16k cap, vLLM evaluation.
 

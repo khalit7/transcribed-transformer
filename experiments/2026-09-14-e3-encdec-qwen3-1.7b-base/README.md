@@ -31,6 +31,8 @@ Against it: RedLLM (arXiv 2510.26622) found the prefix-LM decoder beat their enc
 
 ## Result
 
+> **Comparators affected by a bug; this run stands.** This arm and its adaptation stage trained under FSDP, which the 2026-09-28 audit found unaffected by the DDP gradient-synchronisation bug; their numbers are sound. The E1 and E2++ arms they are read against are DDP runs (half the data at batch 16) and are not being re-run, so the 0.35 gap is a comparison against under-trained controls ([the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)). The run's weights and wandb pages were deleted in error during the 2026-09-28 cleanup; its training log, wandb export and results are kept under `checkpoints/e3-qwen3-1.7b-base/`.
+
 **Fine-tune val loss (E1 and E2++ at the same steps for reference):**
 
 | step | E3 | E1 | E2++ | E2 (no adaptation) |

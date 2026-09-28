@@ -26,6 +26,8 @@ A 1.7B causal decoder, fine-tuned with the loss on the answer only, learns the t
 
 ## Result
 
+> **Run had bugs, so don't trust these results fully.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients: each rank trained its own replica on its half of every step and rank 0's replica was saved, so every number below is for a model trained on half the data at an effective batch of 16 (notes, D58; [the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)). Comparisons between the arms of this record stay matched, the same defect being on both sides; absolute numbers, and comparisons against FSDP-trained arms, are not. This run is not being re-run.
+
 Read from wandb `tt-decoder/nxxkzq91` (training summary and the `bench/*` keys logged by `src/train/evaluate.py`; full tables in `checkpoints/e1-qwen3-1.7b-base/eval/benchmark/results.md`).
 
 Training: 2,859 steps, 4.61 h on two GPUs, 15.1k tokens/s, MFU 0.42, val loss 1.18 → 0.503 (monotone, still falling at the end of the epoch).

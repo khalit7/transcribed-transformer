@@ -42,6 +42,8 @@ Both stages: 196 steps, 19.4M tokens, 3,164 transcripts, 2 epochs, 16k-token mic
 
 ## Result
 
+> **Run had bugs, so don't trust these results fully.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients: each rank trained its own replica on its half of every step and rank 0's replica was saved, so every number below is for a model trained on half the data at an effective batch of 16 (notes, D58; [the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)). Comparisons between the arms of this record stay matched, the same defect being on both sides; absolute numbers, and comparisons against FSDP-trained arms, are not. This run is not being re-run.
+
 **E1+ (read from wandb `tt-decoder/99heynpr`, `bench/*` keys; full tables under `checkpoints/e1plus-qwen3-1.7b-base/eval/benchmark/`).** Benchmark macro-F1 clean 0.738 / messy 0.715 (E1: 0.735 / 0.719); unseen questions 0.650 / 0.645 (E1: 0.654 / 0.652); evidence F1 0.602 / 0.567 (E1: 0.603 / 0.570); format valid 0.985 / 0.978 (E1: 0.985 / 0.979). Every slice within ±0.005 of E1 except the small vulnerability cell (0.758 / 0.786 vs 0.729 / 0.770, n = 420 / 480). The prediction that the causal stage would change little holds: E1+ is E1.
 
 **E2+ (wandb `tt-decoder/397r6da5`; full tables under `checkpoints/e2plus-qwen3-1.7b-base/eval/benchmark/`).** Generation 22:03–06:10 through the prefix-LM loop (8.1 h). Against E1+ (which is E1 to ±0.005):

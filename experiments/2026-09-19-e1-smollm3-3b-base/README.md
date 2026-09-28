@@ -38,6 +38,8 @@ The initial offline launch was stopped at the owner's request before its first p
 
 ## Result
 
+> **Comparators affected by a bug.** This run trained under FSDP and is sound; the cross-family controls it is read against (Qwen3-1.7B, Qwen2.5-1.5B, Hunyuan-1.8B) trained under the DDP loop that the 2026-09-28 audit found never synchronised gradients (half the data, batch 16). Qwen2.5-1.5B and Hunyuan-1.8B are being re-run; Qwen3-1.7B is not ([the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)).
+
 Training completed successfully at step 2,858; tmux reports exit status 0 and the final HF checkpoint is present. W&B API read on 2026-09-20: final training loss 0.4676753233273272, validation loss 0.46090880036354065 and 239,498,960 tokens seen. The trainer reports 7.09 hours for its training/validation/checkpoint/export section, excluding initial setup.
 
 **Benchmark** (scored 2026-09-20 10:42, `checkpoints/e1-smollm3-3b-base/eval/benchmark/results.md`, 518 `bench/*` keys on run `e82so2fd`), clean / messy, beside the model it was run to compare with and the other large decoders:

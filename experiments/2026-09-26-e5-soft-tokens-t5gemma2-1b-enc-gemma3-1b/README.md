@@ -18,6 +18,10 @@ The stitch fitted onto the decoder's embeddings explains barely more of them tha
 against 0.620) despite mapping 1152 to 1152 rather than 640 to 1152, so I expect a similar starting distance from E1's
 own input; the run's step-0 validation loss is that measurement.
 
+## Related work
+
+The mechanism is not new. [LangBridge (Yoon et al., ACL 2024)](https://aclanthology.org/2024.acl-long.405/) maps an mT5 encoder's hidden states through a trainable linear layer into a frozen decoder-only model's input-embedding space as soft prompts, trained with a language-modelling objective, for cross-lingual transfer. [Dolphin (Chen et al., 2024)](https://arxiv.org/abs/2408.15518) projects a small decoder's encoding of a long context into a 7B decoder's input space, borrowing the vision-language projector recipe; [E2LLM (EMNLP 2025)](https://aclanthology.org/2025.emnlp-main.970.pdf), [xRAG (NeurIPS 2024)](https://arxiv.org/pdf/2405.13792) and [ICAE (ICLR 2024)](https://arxiv.org/abs/2307.06945) project a text encoder's output into the decoder's input at various compression ratios with an alignment stage before task tuning. What this record adds is the controlled measurement: the decoder can read the input as tokens anyway, so the question is whether a bidirectional read of the same tokens is worth anything on top of it; the unadapted arm is run as a control; and the adapted arm is read against the same decoder given the identical adaptation data, cuts and budget with the prefix as tokens, so a gain is attributable to the encoder rather than to the extra training. Same-family encoder and decoder, both towers trained, the stitch initialised by regression onto the decoder's own embeddings, and an encoder-size axis at one decoder are the other differences.
+
 ## Prediction
 
 - Clearly above the control (`e1-gemma3-1b-pt`: clean macro-F1 0.651, unseen-question 0.496, evidence F1 0.530),
@@ -27,7 +31,7 @@ own input; the run's step-0 validation loss is that measurement.
 - Above the 270m arm (0.636 / 0.461) but level with the control: scaling repairs the deficit and there is still no
   benefit from an encoder in front.
 - **Disconfirmed if** at or below the control on both variants: unadapted replacement is deprioritised at this size.
-  A second negative would not show that soft tokens fail in general or that cross-attention is necessary; two encoder
+  A second negative would not show that soft tokens fail in general or that reading the encoder at every layer is necessary; two encoder
   sizes under one recipe cannot separate the interface from the objective. Adaptation of the 270m arm is then next.
 - One seed; a gap under about 0.02 is a direction, not a result.
 
@@ -43,6 +47,8 @@ own input; the run's step-0 validation loss is that measurement.
 - wandb: [tt-encdec/bbiurpxu](https://wandb.ai/khalit7-/tt-encdec/runs/bbiurpxu); benchmark keys logged to the same run.
 
 ## Result
+
+> **The numbers below come from a run with a bug and are being replaced.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients (each rank trained its own replica on its half of every step; rank 0's was saved), so these are for a model trained on half the data at an effective batch of 16. The run is in the re-run queue under the fixed loop ([the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)); its replacement's numbers replace these when scored.
 
 - Smoke (10:14, both cards): 2.00B trainable; three steps loss 2.20, val 2.25 at step 3 (the 270m arm: 4.16 and 3.45), 13.0k tokens/s, 26.2 GiB at 8k micro-batches; two steps on the 64 longest records 27.2 GiB peak.
 - Validation against the control, same steps: **2.81 / 1.73 (step 0)**, 0.938 / 0.921 (200), 0.857 / 0.837 (400), 0.810 / 0.797 (600), 0.775 / 0.764 (800), 0.748 / 0.742 (1000), 0.728 / 0.717 (1200), 0.711 / 0.705 (1400), 0.689 / 0.685 (1600), 0.677 / 0.672 (1800), 0.658 / 0.659 (2000), 0.646 / 0.649 (2200), 0.637 / 0.642 (2400), 0.631 / 0.637 (2600), 0.627 / 0.634 (2800), **0.624 / 0.632 (2858)**. The stitched input starts 1.1 nats above E1's own (the 270m arm's 2.7) despite a stitch that fits the embeddings no better (0.636 against 0.620): the larger encoder's states are far more readable to this decoder. Level with the control from step 2000 and 0.008 below at the end, the first E5 arm to cross it. The pre-clip gradient norm spiked between steps 1110 and 1290 (mostly 26–47, once 303, once 150) with no movement in the loss, and sat at 6–10 otherwise. Training 6.31 h (10:17 → 16:36) at about 11.5k tokens/s over the pair, 27.1 GiB peak.
@@ -60,7 +66,7 @@ own input; the run's step-0 validation loss is that measurement.
 
 ## Verdict
 
-The middle outcome: scaling the encoder repaired the 270m arm's deficit, and there is still no gain on answers. The pre-registered disconfirmation (at or below the control on both variants) fires on overall macro-F1 by 0.004 and 0.007, inside what one seed could move, so I read it as level rather than as a loss; unseen questions trail by 0.01–0.02 and evidence F1 leads by 0.01, with the cleaner outputs (format and evidence precision) the one consistent improvement. The comparison that decides the reading is the same 1B encoder behind the native 270M decoder: 0.724 / 0.646 with a decoder a quarter the size, against 0.647 / 0.477 here. The encoder carries the information; a causal decoder given it as soft tokens, with no attention adapted to read it, recovers its own performance and little more. Two encoder sizes under one recipe cannot separate the interface from the objective, so this does not show that soft tokens fail in general or that cross-attention is necessary, but it does settle that unadapted replacement is not the route at this size, and together with the 270m arm and the E6 gate result it is the third time a decoder-only model has failed to profit from a bidirectional encoder under a 2.8k-step fine-tune, against native and stitched pairs that do. One seed.
+The middle outcome: scaling the encoder repaired the 270m arm's deficit, and there is still no gain on answers. The pre-registered disconfirmation (at or below the control on both variants) fires on overall macro-F1 by 0.004 and 0.007, inside what one seed could move, so I read it as level rather than as a loss; unseen questions trail by 0.01–0.02 and evidence F1 leads by 0.01, with the cleaner outputs (format and evidence precision) the one consistent improvement. The comparison that decides the reading is the same 1B encoder behind the native 270M decoder: 0.724 / 0.646 with a decoder a quarter the size, against 0.647 / 0.477 here. The encoder carries the information; a causal decoder given it as soft tokens, with no attention adapted to read it, recovers its own performance and little more. Two encoder sizes under one recipe cannot separate the interface from the objective, so this does not show that soft tokens fail in general or that the encoder's states are needed at every layer rather than at the input, but it does settle that unadapted replacement is not the route at this size, and together with the 270m arm and the E6 gate result it is the third time a decoder-only model has failed to profit from a bidirectional encoder under a 2.8k-step fine-tune, against native and stitched pairs that do. One seed.
 
 ## Follow-ups
 

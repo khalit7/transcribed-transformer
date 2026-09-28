@@ -23,6 +23,8 @@ The native pairs show the encoder-decoder beating the decoder it was made from a
 
 ## Result
 
+> **Run had bugs, so don't trust these results fully.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients: each rank trained its own replica on its half of every step and rank 0's replica was saved, so every number below is for a model trained on half the data at an effective batch of 16 (notes, D58; [the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)). Comparisons between the arms of this record stay matched, the same defect being on both sides; absolute numbers, and comparisons against FSDP-trained arms, are not. This run is not being re-run.
+
 Benchmark (38,220 outputs over 20,700 pairs), the E6 native hybrid against its two parents:
 
 | | macro-F1 clean / messy | unseen-question macro-F1 clean / messy | evidence F1 clean / messy | format valid clean / messy |

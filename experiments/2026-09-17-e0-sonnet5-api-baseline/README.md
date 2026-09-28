@@ -4,6 +4,8 @@ Written before the run finished, 2026-09-17 01:00. Run on Sonnet 5 through the C
 
 ## Hypothesis
 
+> **Comparator numbers in this record come from runs with a bug.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients (half the data at batch 16), so every trained-arm number quoted here as a bar or reference (the native pairs, the mix-and-match arms, the 1B and 270M decoders, E1++ and E5++) is from a buggy run being replaced by a re-run ([the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)); read the predictions against the re-run numbers when they land.
+
 The README's E0 row: a frontier model behind an API, given the same prompt and transcript rendering as the trained arms, is the baseline every trained arm must beat on quality and cost. After the encoder-decoder pairs, the strongest trained model on the benchmark is T5Gemma 2 1b-1b (macro-F1 0.744 / 0.722 clean / messy; 0.677 / 0.642 on unseen questions). A frontier model has read no training labels but has the general competence the small models lack, and the labels themselves came from a labeller pipeline with Claude models in it (adjudication by Opus), so a Claude model shares a lineage with the gold.
 
 ## Prediction
