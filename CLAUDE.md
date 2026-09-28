@@ -66,6 +66,10 @@ Human-verbatim transcription is **tier 3, not tier 1**. It is a record of speech
 
 A corpus that ships both a human transcript and an ASR transcript is a tier 1 corpus whose human side is **reference data for fitting the channel model**, not training text. Preferring the human side because it is cleaner inverts the whole point.
 
+### Two-model review before the expensive part
+
+No training stage, adaptation stage or benchmark generation starts until the exact tree that will run has been reviewed, read-only and independently, by Codex gpt-6-astra and a Claude Opus agent, every finding fixed or rejected in writing, and the tree hash approved through the `pre-run-review` skill's gate (`.claude/skills/pre-run-review/scripts/gate.py`). Every changed line counts: code under `src/`, configs, tests, queue scripts, the evaluator. Smokes are exempt; they check the fixes. The gate is called by every queue script before every launch; a launch that bypasses it is recorded in the notes as a violation. This exists because a gradient-synchronisation bug in the DDP path ran unreviewed for two weeks and 27 runs (2026-09-28).
+
 ### Results are recorded, never estimated
 
 Never write a number into a README, table, docstring or commit message that did not come from an actual run. If a result is not yet measured, write `TBD`. Do not infer, extrapolate or "reasonably estimate" training metrics, throughput or accuracy. A placeholder is honest; a plausible-looking invented number is not.
