@@ -36,12 +36,15 @@ class SoftStitched(nn.Module):
         pair can be tested on CPU; prefer `SoftStitched.from_pretrained`."""
         super().__init__()
         self.dec_base, self.enc_base, self.attn = dec_base, enc_base, attn
-        self.config = dec_lm.config  # the decoder's: what generation's cache and the loop's MFU term read
-        dec_lm.config.use_cache = False
-        self.decoder = dec_lm.model
+        # a multimodal checkpoint (Gemma 3 4B and up) keeps its text decoder under `language_model`; the image tower and
+        # projector are never called and are not kept
+        text = dec_lm.model.language_model if hasattr(dec_lm.model, "language_model") else dec_lm.model
+        self.config = text.config  # the text decoder's: what generation's cache and the loop's MFU term read
+        self.config.use_cache = False
+        self.decoder = text
         self.lm_head = dec_lm.lm_head
         self.encoder = text_encoder
-        d_enc, d_dec = text_encoder.config.hidden_size, dec_lm.config.hidden_size
+        d_enc, d_dec = text_encoder.config.hidden_size, text.config.hidden_size
         dt = next(self.decoder.parameters()).dtype
         self.stitch = stitch if stitch is not None else nn.Linear(d_enc, d_dec, bias=True, dtype=dt)
         if gradient_checkpointing:
@@ -108,7 +111,15 @@ class SoftStitched(nn.Module):
         path = Path(path)
         meta = json.loads((path / "soft.json").read_text())
         m = cls.from_pretrained(meta["dec_base"], meta["enc_base"], attn or meta["attn"], gradient_checkpointing)
-        m.load_state_dict(torch.load(path / "soft.pt", map_location="cpu"))
+        sd = torch.load(path / "soft.pt", map_location="cpu")
+        # the head is tied to the decoder's embeddings; an export gathered from FSDP shards carries the shared tensor
+        # once, under the embedding key, so the head key may be absent: load what is there and re-tie
+        missing, unexpected = m.load_state_dict(sd, strict=False)
+        tied = {"lm_head.weight"}
+        if unexpected or set(missing) - tied:
+            raise RuntimeError(f"soft checkpoint mismatch: missing {sorted(set(missing) - tied)}, unexpected {sorted(unexpected)}")
+        if missing:
+            m.lm_head.weight = m.decoder.embed_tokens.weight
         return m
 
     @staticmethod

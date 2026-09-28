@@ -49,8 +49,14 @@ def test_plan_epoch_covers_every_example_once_and_respects_budget():
 def test_score_pair_gates_and_status():
     ok = score_pair(REC, {"variant": "clean", "text": '{"evidence": [1], "answer": "pass", "summary": "x"}'})
     assert ok["status"] == "exact" and ok["format_valid"] and ok["ev_exact"] == 1.0 and ok["ev_prec"] == 1.0
-    rec = score_pair(REC, {"variant": "clean", "text": 'Sure! {"evidence": [1, 2], "answer": "Pass", "summary": "x"}'})
+    rec = score_pair(REC, {"variant": "clean", "text": ' {"evidence": [1, 2], "answer": "Pass", "summary": "x"}\n'})
     assert rec["status"] == "recovered" and rec["credit"] == 0.3 and not rec["format_valid"] and rec["ev_prec"] == 0.5
+    assert rec["pred"] == "<invalid>" and rec["pred_raw"] == "pass"  # partial credit only: never a correct prediction
+    # strict format: the whole output is one JSON object, with a summary string
+    wrapped = score_pair(REC, {"variant": "clean", "text": 'Sure! {"evidence": [1], "answer": "pass", "summary": "x"}'})
+    assert wrapped["status"] == "invalid" and not wrapped["parsed"] and wrapped["ev_prec"] == 0.0
+    no_summary = score_pair(REC, {"variant": "clean", "text": '{"evidence": [1], "answer": "pass"}'})
+    assert no_summary["status"] == "exact" and not no_summary["format_valid"]
     bad_ev = score_pair(REC, {"variant": "clean", "text": '{"evidence": "1, 2", "answer": "pass", "summary": "x"}'})
     assert bad_ev["status"] == "exact" and not bad_ev["ev_valid"] and bad_ev["ev_prec"] == 0.0
     out_of_range = score_pair(REC, {"variant": "clean", "text": '{"evidence": [0, 4], "answer": "pass", "summary": "x"}'})
@@ -67,7 +73,13 @@ def test_score_pair_gates_and_status():
 def test_macro_f1_and_parse():
     rows = [{"gold": "pass", "pred": "pass"}, {"gold": "fail", "pred": "pass"}, {"gold": "fail", "pred": "fail"}]
     assert abs(macro_f1(rows) - (2 / 3 + 2 / 3) / 2) < 1e-9
-    assert parse('```json\n{"a": 1}\n```') == {"a": 1}
+    # the classes are the questions' option values: predicting an option that never occurs as gold is a false positive
+    # for that class, and an option nobody predicts or holds as gold is left out
+    opts = [{**r, "options": ["pass", "fail", "NA"]} for r in rows] + [{"gold": "pass", "pred": "NA", "options": ["pass", "fail", "NA"]}]
+    assert abs(macro_f1(opts) - (2 / 4 + 2 / 3 + 0.0) / 3) < 1e-9
+    assert abs(macro_f1([{**r, "options": ["pass", "fail", "NA"]} for r in rows]) - (2 / 3 + 2 / 3) / 2) < 1e-9
+    assert parse('```json\n{"a": 1}\n```') is None  # strict: one JSON object and nothing else
+    assert parse(' {"a": 1}\n') == {"a": 1}
     assert parse("[1, 2]") is None
 
 
@@ -580,6 +592,10 @@ def test_collate_continuation_matches_the_seq2seq_cuts_and_supervises_the_contin
     ex = [Example(id="a", variant="c", input_ids=np.arange(10, 30, dtype=np.int32), n_prompt=0),
           Example(id="b", variant="c", input_ids=np.arange(100, 108, dtype=np.int32), n_prompt=0)]
     b = collate_continuation(ex, [0, 1], pad_id=0, seed=1, max_target=3, cut=(0.5, 0.5))
+    # the cut is a property of the document under the seed, not of the batch it lands in
+    from src.train.data import seq2seq_cuts
+    assert seq2seq_cuts(ex, [0, 1], 7, 3, (0.2, 0.8)) == [seq2seq_cuts(ex, [1, 0], 7, 3, (0.2, 0.8))[1], seq2seq_cuts(ex, [1], 7, 3, (0.2, 0.8))[0]]
+    assert seq2seq_cuts(ex, [0], 7, 3, (0.2, 0.8)) != seq2seq_cuts(ex, [0], 8, 3, (0.2, 0.8))
     # document a is cut at 10: prefix 10..19 as tokens, continuation capped at 3 tokens (20, 21, 22), loss there only
     assert b["input_ids"][0].tolist()[:13] == list(range(10, 23)) and b["prompt_len"][0] == 10
     assert b["labels"][0].tolist()[:13] == [-100] * 10 + [20, 21, 22] and b["labels"][0, 13:].eq(-100).all()
@@ -600,3 +616,123 @@ def test_collate_encdec_seq2seq_with_the_prefix_on_the_decoder_side():
     # without dec_prompt (the Qwen E3 adaptation) the decoder side is the start token and the continuation, as before
     q = collate_encdec(ex, [0], pad_id=0, start_id=999, seed=1, seq2seq=True, max_target=3, cut=(0.5, 0.5))
     assert q["dec_ids"][0].tolist() == [999, 20, 21] and q["labels"][0].tolist() == [20, 21, 22]
+
+
+def test_sharded_root_forward_serves_the_soft_model_too():
+    import torch
+
+    from src.train.train import ShardedStitched
+    m, _ = _tiny_soft()
+    root = ShardedStitched(m)
+    batch = {"enc_ids": torch.tensor([[2, 5, 6, 7, 8]]), "enc_mask": torch.ones(1, 5, dtype=torch.long),
+             "dec_ids": torch.tensor([[2, 5, 6, 7, 8, 11, 12]]), "dec_mask": torch.ones(1, 7, dtype=torch.long),
+             "labels": torch.tensor([[-100, -100, -100, -100, 11, 12, 13]])}
+    loss, n = root(batch, torch.device("cpu"))
+    assert n == 3 and loss.ndim == 0 and torch.isfinite(loss)
+
+
+def test_soft_load_reties_a_head_missing_from_an_fsdp_export(tmp_path, monkeypatch):
+    import torch
+
+    from src.train import soft as soft_mod
+    m, _ = _tiny_soft()
+    sd = {k: v for k, v in m.state_dict().items() if k != "lm_head.weight"}  # what an FSDP gather of tied weights carries
+    (tmp_path / "final").mkdir()
+    torch.save(sd, tmp_path / "final" / "soft.pt")
+    (tmp_path / "final" / "soft.json").write_text('{"dec_base": "dec", "enc_base": "enc", "attn": "sdpa"}')
+    fresh, _ = _tiny_soft()
+    monkeypatch.setattr(soft_mod.SoftStitched, "from_pretrained", classmethod(lambda cls, *a, **k: fresh))
+    loaded = soft_mod.SoftStitched.load(tmp_path / "final")
+    assert loaded.lm_head.weight.data_ptr() == loaded.decoder.embed_tokens.weight.data_ptr()
+    assert torch.equal(loaded.decoder.embed_tokens.weight, m.decoder.embed_tokens.weight)
+
+
+def test_plan_counts_no_prediction_for_the_first_token_of_a_promptless_document():
+    ex = [Example(id="a", variant="c", input_ids=np.arange(10, 30, dtype=np.int32), n_prompt=0),
+          Example(id="b", variant="c", input_ids=np.arange(100, 108, dtype=np.int32), n_prompt=3)]
+    steps = plan_epoch(ex, 2, 8192, 1, 0, 0)
+    assert len(steps) == 1 and steps[0].target_tokens == 19 + 5  # the shifted labels of a and the answer of b
+
+
+def _ddp_worker(rank: int, world: int, port: int, q):
+    import os
+
+    import torch
+    import torch.distributed as dist
+    from torch.nn.parallel import DistributedDataParallel as DDP
+
+    from src.train.train import LossWrapper, target_loss, unwrap
+    os.environ["MASTER_ADDR"], os.environ["MASTER_PORT"] = "127.0.0.1", str(port)
+    dist.init_process_group("gloo", rank=rank, world_size=world)
+    torch.manual_seed(0)
+    from transformers import Gemma3ForCausalLM, Gemma3TextConfig
+    cfg = Gemma3TextConfig(vocab_size=64, hidden_size=32, intermediate_size=48, num_hidden_layers=2, num_attention_heads=2,
+                           num_key_value_heads=1, head_dim=16, sliding_window=4, layer_types=["sliding_attention", "full_attention"],
+                           query_pre_attn_scalar=16, attn_implementation="sdpa")
+    model = Gemma3ForCausalLM(cfg)  # same seed, same weights on both ranks
+    model.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    wrapped = DDP(LossWrapper(model))
+    assert unwrap(wrapped) is model and set(wrapped.module.state_dict()) == set(model.state_dict())  # no `inner.` prefix
+    ids = torch.arange(1 + 20 * rank, 9 + 20 * rank).view(1, -1)  # a different micro-batch per rank
+    labels = ids.clone()
+    labels[:, :3] = -100
+    batch = {"input_ids": ids, "attention_mask": torch.ones_like(ids), "labels": labels, "prompt_len": torch.tensor([3])}
+    loss, n = target_loss(wrapped, batch, torch.device("cpu"))
+    assert n == 5
+    (loss / n).backward()
+    g = model.model.layers[0].mlp.down_proj.weight.grad.clone()
+    # the gradient each rank would have on its own: the same forward on an unwrapped copy
+    dist.barrier()
+    alone = Gemma3ForCausalLM(cfg)
+    alone.load_state_dict(model.state_dict())
+    l2, _ = target_loss(alone, batch, torch.device("cpu"))
+    (l2 / n).backward()
+    own = alone.model.layers[0].mlp.down_proj.weight.grad
+    gathered = [torch.zeros_like(own) for _ in range(world)]
+    dist.all_gather(gathered, own)
+    q.put((rank, torch.allclose(g, sum(gathered) / world, atol=1e-5), torch.allclose(g, own, atol=1e-5)))
+    dist.destroy_process_group()
+
+
+def test_ddp_routes_the_loss_through_the_reducer_so_gradients_are_averaged_across_ranks():
+    """The 2026-09-28 bug: the forward on the bare module never armed DDP's reducer, so ranks trained apart."""
+    import socket
+
+    import torch.multiprocessing as mp
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    ctx = mp.get_context("spawn")
+    q = ctx.Queue()
+    procs = [ctx.Process(target=_ddp_worker, args=(r, 2, port, q)) for r in range(2)]
+    for p in procs:
+        p.start()
+    results = [q.get(timeout=300) for _ in procs]
+    for p in procs:
+        p.join(60)
+    assert all(p.exitcode == 0 for p in procs)
+    assert all(averaged for _, averaged, _ in results), results
+    assert not any(own for _, _, own in results), results  # the ranks' own gradients differ, so averaging is observable
+
+
+def test_adaptation_documents_open_with_the_tokenizer_start_token():
+    from src.train.data import _encode_docs, start_tokens
+
+    class Tok:  # Gemma-like: a start token in front of every prompt
+        bos_token_id = 2
+
+        def __call__(self, texts, add_special_tokens=True):
+            enc = lambda t: [ord(c) for c in t]
+            return {"input_ids": ([2] + enc(texts) if add_special_tokens else enc(texts)) if isinstance(texts, str)
+                    else [([2] if add_special_tokens else []) + enc(t) for t in texts]}
+
+    class NoBos(Tok):
+        bos_token_id = None
+
+    assert start_tokens(Tok()) == [2] and start_tokens(NoBos()) == []
+    out: list = []
+    assert _encode_docs([("d", "abcdef")], Tok(), max_seq_len=6, eos=1, out=out) == 1  # truncated to fit the start token and eos
+    assert out[0].input_ids.tolist() == [2, 97, 98, 99, 100, 1] and out[0].n_prompt == 0
+    out = []
+    _encode_docs([("d", "ab")], NoBos(), max_seq_len=6, eos=1, out=out)
+    assert out[0].input_ids.tolist() == [97, 98, 1]

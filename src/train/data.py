@@ -160,7 +160,7 @@ def build_transcript_examples(path: Path, tokenizer, variants: list[str], max_se
     """One example per call (not per pair) for the adaptation stage: the numbered transcript exactly as
     it appears in the prompt's TRANSCRIPT block, plus the end-of-text token, with n_prompt=0 so every
     token is a target. Variants as in build_examples."""
-    key = hashlib.sha1(f"transcripts|{path}|{path.stat().st_mtime_ns}|{tokenizer.name_or_path}|{variants}|{max_seq_len}|{limit}"
+    key = hashlib.sha1(f"transcripts|bos|{path}|{path.stat().st_mtime_ns}|{tokenizer.name_or_path}|{variants}|{max_seq_len}|{limit}"
                        .encode()).hexdigest()[:16]
     cache = (cache_dir / f"{path.stem}-transcripts-{key}.pt") if cache_dir else None
     if cache and cache.exists():
@@ -175,6 +175,7 @@ def build_transcript_examples(path: Path, tokenizer, variants: list[str], max_se
         nonlocal dropped
         enc = tokenizer([t for _, _, t in pending], add_special_tokens=False)["input_ids"]
         for (cid, v, _), ids in zip(pending, enc):
+            ids = start_tokens(tokenizer) + ids  # opens as a fine-tune prompt does
             if len(ids) + 1 > max_seq_len:
                 dropped += 1
                 continue
@@ -228,14 +229,22 @@ def labelled_doc_ids(split_dir: Path) -> set[str]:
     return out
 
 
+def start_tokens(tokenizer) -> list[int]:
+    """What the tokenizer puts in front of a prompt (Gemma's <bos>, nothing for Qwen): adaptation documents open the same
+    way as every fine-tune prompt, so a decoder adapted on them reads the input format it is fine-tuned and evaluated on."""
+    return tokenizer("x")["input_ids"][:-1] if tokenizer.bos_token_id is not None else []
+
+
 def _encode_docs(pending: list[tuple[str, str]], tokenizer, max_seq_len: int, eos: int, out: list[Example]) -> int:
-    """Tokenise rendered documents into `out`, truncating to max_seq_len; returns how many were truncated."""
+    """Tokenise rendered documents into `out`, opening each with the tokenizer's start token and truncating to
+    max_seq_len; returns how many were truncated."""
     truncated = 0
     if not pending:
         return 0
     # a 170k-token document is tokenised in full before truncation otherwise; cap the text first
     enc = tokenizer([t[:max_seq_len * 8] for _, t in pending], add_special_tokens=False)["input_ids"]
     for (did, _), ids in zip(pending, enc):
+        ids = start_tokens(tokenizer) + ids
         if len(ids) + 1 > max_seq_len:
             ids = ids[:max_seq_len - 1]
             truncated += 1
@@ -250,7 +259,7 @@ def build_corpus_examples(corpora, tokenizer, max_seq_len: int, side: str, seed:
     rendered as numbered lines, truncated to max_seq_len (adaptation text, so truncation beats dropping).
     `docs`/`val_docs` per corpus set the expected sample size."""
     spec = [(str(c.path), c.docs if side == "train" else c.val_docs) for c in corpora]
-    key = hashlib.sha1(f"corpora|{spec}|{side}|{seed}|{tokenizer.name_or_path}|{max_seq_len}|{limit}|{len(exclude)}".encode()).hexdigest()[:16]
+    key = hashlib.sha1(f"corpora|bos|{spec}|{side}|{seed}|{tokenizer.name_or_path}|{max_seq_len}|{limit}|{len(exclude)}".encode()).hexdigest()[:16]
     cache = (cache_dir / f"corpora-{side}-{key}.pt") if cache_dir else None
     if cache and cache.exists():
         return _load_cache(cache)
@@ -305,13 +314,15 @@ def mntp_mask(batch: dict[str, torch.Tensor], mask_prob: float, mask_id: int, se
 
 
 def seq2seq_cuts(examples: list[Example], idx: list[int], seed: int, max_target: int, cut: tuple[float, float]) -> list[int]:
-    """The cut point per example for a seq2seq micro-batch, deterministic in the seed; collate_encdec and the
-    loss normaliser both use it, so every rank can compute every rank's supervised-token count."""
-    rng = random.Random(seed)
+    """The cut point per example for a seq2seq micro-batch, deterministic in the seed and the document (not in the
+    batch layout); collate_encdec, collate_continuation and the loss normaliser all use it, so every rank can compute
+    every rank's supervised-token count and two arms on the same data see the same cuts."""
     out = []
     for i in idx:
-        n = len(examples[i].input_ids)
-        c = int(n * rng.uniform(*cut))
+        e = examples[i]
+        n = len(e.input_ids)
+        # one draw per document, seeded by the document itself: the cut does not depend on the micro-batch it lands in
+        c = int(n * random.Random(f"{seed}|{e.id}|{e.variant}").uniform(*cut))
         out.append(min(max(c, 1), n - 1))
     return out
 
@@ -415,7 +426,8 @@ def plan_epoch(examples: list[Example], batch_sequences: int, micro_tokens: int,
             if cur:
                 packed.append(cur)
             micro.append(packed)
-        steps.append(Step(micro=micro, target_tokens=sum(examples[i].n_target for i in group)))
+        # a sequence with no prompt (adaptation text) has no prediction for its first token after the shift
+        steps.append(Step(micro=micro, target_tokens=sum(examples[i].n_target - (examples[i].n_prompt == 0) for i in group)))
     return steps
 
 

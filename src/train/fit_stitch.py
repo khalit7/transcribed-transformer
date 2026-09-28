@@ -44,8 +44,9 @@ class EmbeddingTarget(torch.nn.Module):
         super().__init__()
         from transformers import AutoModelForCausalLM
         lm = AutoModelForCausalLM.from_pretrained(base, dtype=torch.bfloat16)
-        self.embed = lm.model.embed_tokens  # Gemma 3 scales inside the module; the rest of the model is dropped
-        self.config = lm.config
+        text = lm.model.language_model if hasattr(lm.model, "language_model") else lm.model  # multimodal checkpoints (4B+)
+        self.embed = text.embed_tokens  # Gemma 3 scales inside the module; the rest of the model is dropped
+        self.config = text.config
         del lm
 
     def forward(self, input_ids, attention_mask=None):

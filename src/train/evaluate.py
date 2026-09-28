@@ -26,24 +26,13 @@ INVALID = "<invalid>"
 
 
 def parse(text: str) -> dict | None:
-    t = text.strip()
-    for cand in (t, t[t.find("{"):t.rfind("}") + 1] if "{" in t and "}" in t else ""):
-        if not cand:
-            continue
-        try:
-            o = json.loads(cand)
-            if isinstance(o, dict):
-                return o
-        except json.JSONDecodeError:
-            continue
-    m = re.search(r"\{.*?\}", t, re.DOTALL)
-    if m:
-        try:
-            o = json.loads(m.group(0))
-            return o if isinstance(o, dict) else None
-        except json.JSONDecodeError:
-            return None
-    return None
+    """Strict: the whole output, less surrounding whitespace, must be one JSON object. No repair of surrounding text,
+    fences or truncation (the benchmark scores format validity strictly, and a lenient parser hides the raw error rate)."""
+    try:
+        o = json.loads(text.strip())
+    except json.JSONDecodeError:
+        return None
+    return o if isinstance(o, dict) else None
 
 
 def _norm(s: str) -> str:
@@ -80,26 +69,34 @@ def score_pair(r: dict, out: dict) -> dict:
     if q.get("tags"):
         pt = o.get("tags") if o else None
         if isinstance(pt, list) and all(isinstance(t, str) for t in pt):
-            ps = set(pt) & set(q["tags"])
+            ps = set(pt)  # a tag outside the question's vocabulary is a wrong tag, not an ignored one
             tag_j = 1.0 if not ps and not gold_tags else len(ps & gold_tags) / len(ps | gold_tags)
         else:
             tag_j = 0.0
     return {"id": r["id"], "variant": out["variant"], "dataset": r["dataset"], "track": r["track"], "family": q["family"],
             "qid": q["id"], "cell": r.get("cell", "seen_q"), "prompt_tokens": out.get("prompt_tokens"),
-            "gold": r["label"]["answer"], "pred": pred, "status": status, "parsed": o is not None,
+            # a recovered answer is a failure with partial credit (`credit`), never a correct prediction: the answer
+            # metrics see it as invalid, `pred_raw` keeps what it would have been
+            "gold": r["label"]["answer"], "pred": pred if status == "exact" else INVALID, "pred_raw": pred, "status": status,
+            "parsed": o is not None, "options": values,
             "credit": {"exact": 1.0, "recovered": 0.3, "invalid": 0.0}[status],
             "ev_valid": bool(ev_valid), "ev_prec": prec, "ev_rec": rec, "ev_f1": f1, "ev_exact": exact,
-            "gold_empty": not gold_ev, "tag_jaccard": tag_j, "format_valid": status == "exact" and bool(ev_valid)}
+            "gold_empty": not gold_ev, "tag_jaccard": tag_j,
+            "format_valid": status == "exact" and bool(ev_valid) and isinstance((o or {}).get("summary"), str)}
 
 
 def macro_f1(rows: list[dict], key: str = "pred") -> float:
-    classes = sorted({r["gold"] for r in rows})
+    """Macro-F1 over the answer values the questions supplied (every option of every question in the rows, plus any
+    gold value), so a wrong prediction of an option that never occurs as gold is a false positive for that class. A
+    class with neither gold nor predictions has no F1 and is left out of the mean."""
+    classes = sorted({r["gold"] for r in rows} | {v for r in rows for v in r.get("options", [])})
     f1s = []
     for c in classes:
         tp = sum(1 for r in rows if r["gold"] == c and r[key] == c)
         fp = sum(1 for r in rows if r["gold"] != c and r[key] == c)
         fn = sum(1 for r in rows if r["gold"] == c and r[key] != c)
-        f1s.append(2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) else 0.0)
+        if 2 * tp + fp + fn:
+            f1s.append(2 * tp / (2 * tp + fp + fn))
     return sum(f1s) / len(f1s) if f1s else 0.0
 
 
@@ -128,7 +125,7 @@ def summarise(rows: list[dict]) -> dict:
 
 
 def bucket(tokens: int | None) -> str:
-    if tokens is None:
+    if tokens is None or tokens <= 0:
         return "unknown"
     return next(name for lo, hi, name in BUCKETS if lo < tokens <= hi)
 
@@ -142,16 +139,25 @@ def confusion(rows: list[dict]) -> dict:
 
 def evaluate(split: Path, outputs: Path) -> dict:
     gold = {json.loads(l)["id"]: json.loads(l) for l in split.open()}
+    seen: set[tuple[str, str]] = set()
     rows = []
     for line in outputs.open():
         o = json.loads(line)
-        if o["id"] in gold:
+        if o["id"] in gold and (o["id"], o["variant"]) not in seen:  # one output per pair: a duplicate never counts twice
+            seen.add((o["id"], o["variant"]))
             rows.append(score_pair(gold[o["id"]], o))
+    # a pair with no output is scored as an empty output, so a partial or interrupted generation cannot inflate a slice
+    for variant in sorted({v for _, v in seen}):
+        for r in gold.values():
+            kinds = {x["kind"] for x in r["transcript"]["variants"]} | {"labelled"}
+            if (r["id"], variant) not in seen and variant in kinds:
+                rows.append(score_pair(r, {"variant": variant, "text": "", "prompt_tokens": None}))
     majority = {qid: collections.Counter(g["label"]["answer"] for g in gold.values() if g["question"]["id"] == qid).most_common(1)[0][0]
                 for qid in {g["question"]["id"] for g in gold.values()}}
     for r in rows:
         r["majority"] = majority[r["qid"]]
-    result: dict = {"split": str(split), "outputs": str(outputs), "pairs_in_split": len(gold), "scored": len(rows), "variants": {}}
+    result: dict = {"split": str(split), "outputs": str(outputs), "pairs_in_split": len(gold), "scored": len(rows),
+                    "missing_outputs": len(rows) - len(seen), "variants": {}}  # pairs scored as empty because no output had them
     for variant in sorted({r["variant"] for r in rows}):
         vr = [r for r in rows if r["variant"] == variant]
         slices: dict = {"overall": summarise(vr)}
@@ -176,7 +182,8 @@ HEADLINE = ["n", "format_valid", "answer_exact", "accuracy", "macro_f1", "majori
 
 def markdown(result: dict) -> str:
     head = (f"# Benchmark results\n\nsplit `{result['split']}`, outputs `{result['outputs']}`, "
-            f"{result['scored']} outputs scored over {result['pairs_in_split']} pairs.\n")
+            f"{result['scored']} outputs scored over {result['pairs_in_split']} pairs; {result['missing_outputs']} pairs had no output "
+            "and were scored as empty.\n")
     lines = [head]
     for variant, slices in result["variants"].items():
         header = "| slice | " + " | ".join(HEADLINE) + " |\n|---|" + "---|" * len(HEADLINE)

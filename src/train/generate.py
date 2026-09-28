@@ -116,9 +116,9 @@ def main() -> None:
                 with torch.no_grad():
                     gen = model.generate(  # type: ignore[call-arg,operator]
                         **enc, max_new_tokens=args.max_tokens, do_sample=False)
-                for (id_, v, _), row in zip(chunk, gen[:, enc["input_ids"].shape[1]:]):
+                for k_, ((id_, v, _), row) in enumerate(zip(chunk, gen[:, enc["input_ids"].shape[1]:])):
                     f.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(row, skip_special_tokens=True),
-                                        "prompt_tokens": int(enc["attention_mask"].sum(1).max()), "output_tokens": int((row != tok.pad_token_id).sum())}) + "\n")
+                                        "prompt_tokens": int(enc["attention_mask"][k_].sum()), "output_tokens": int((row != tok.pad_token_id).sum())}) + "\n")
                 f.flush()
     print(f"done: {len(pairs)} in {time.time() - t0:.0f}s -> {args.out}")
 

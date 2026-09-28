@@ -43,6 +43,7 @@ from src.train.data import (
     mask_encoder_side,
     mntp_mask,
     plan_epoch,
+    seq2seq_cuts,
     seq2seq_encoder_count,
     seq2seq_target_count,
 )
@@ -133,8 +134,8 @@ def load_model(cfg: TrainConfig, device: torch.device):
             return tok, shard_stitched(prepare_for_sharding(model, cfg, device)), attn
         return tok, model.to(device), attn
     if cfg.model.arch == "soft":
-        if cfg.model.lora_r or cfg.model.sharding == "fsdp":
-            raise SystemExit("soft trains every parameter under DDP; drop lora_r / sharding")
+        if cfg.model.lora_r:
+            raise SystemExit("soft trains every parameter; drop lora_r")
         if attn == "flash_attention_2":
             try:
                 import flash_attn  # type: ignore[import-untyped]
@@ -151,6 +152,11 @@ def load_model(cfg: TrainConfig, device: torch.device):
             model = SoftStitched.from_pretrained(cfg.model.base, cfg.model.encoder_base, attn, cfg.model.gradient_checkpointing, cfg.model.stitch)
         if getattr(model.config, "final_logit_softcapping", None):
             raise SystemExit("soft: target_loss applies lm_head directly; this decoder's logit softcapping would be skipped")
+        if cfg.model.sharding == "fsdp":  # the 4B-decoder arms: ~4.9B parameters
+            if cfg.model.frozen:  # before sharding: FSDP2 keeps per-parameter requires_grad, the optimizer skips frozen shards
+                n_on, n_off = freeze_named(model, cfg.model.frozen)
+                log(f"frozen {cfg.model.frozen}: {n_on / 1e6:.1f}M parameters train, {n_off / 1e6:.1f}M frozen")
+            return tok, shard_stitched(prepare_for_sharding(model, cfg, device)), attn
         return tok, model.to(device), attn
     if cfg.model.arch == "hf_encdec":
         from transformers import AutoConfig, AutoModelForSeq2SeqLM
@@ -290,10 +296,11 @@ class ShardedHF(torch.nn.Module):
 
 
 class ShardedStitched(torch.nn.Module):
-    """A Stitched model behind one forward that computes the task loss (FSDP2 root unit, as ShardedHF). The
-    attribute is named `hf` so the sharded export's prefix handling applies unchanged."""
+    """A Stitched or SoftStitched model behind one forward that computes the task loss (FSDP2 root unit, as
+    ShardedHF); both expose (enc_ids, enc_mask, dec_ids, dec_mask) -> hidden and `lm_head`. The attribute is named
+    `hf` so the sharded export's prefix handling applies unchanged."""
 
-    def __init__(self, m: Stitched):
+    def __init__(self, m: "Stitched | SoftStitched"):
         super().__init__()
         self.hf = m
         self.config = m.config
@@ -306,9 +313,9 @@ class ShardedStitched(torch.nn.Module):
         return chunked_ce(self.hf.lm_head, hidden[mask], labels[mask]), int(mask.sum())
 
 
-def shard_stitched(model: Stitched) -> ShardedStitched:
-    """FSDP2 over the stitched pair: every encoder and decoder block a unit; the stitch, embeddings, norms and head
-    in the root, whose forward is the loss."""
+def shard_stitched(model: "Stitched | SoftStitched") -> ShardedStitched:
+    """FSDP2 over a stitched or soft-token pair: every encoder and decoder block a unit; the stitch, embeddings, norms
+    and head in the root, whose forward is the loss."""
     from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
     mp = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16)
     for layer in list(model.encoder.layers) + list(model.decoder.layers):
@@ -359,14 +366,56 @@ def reshard(model) -> None:
             m.reshard()
 
 
+def unwrap(model):
+    """The model itself: behind DDP and its LossWrapper, or as given."""
+    if isinstance(model, DDP):
+        model = model.module
+    return model.inner if isinstance(model, LossWrapper) else model
+
+
+class LossWrapper(torch.nn.Module):
+    """A non-sharded model behind one forward that computes the task loss, so that under DDP the whole computation runs
+    through `DDP.forward`. DDP arms its gradient reducer only in its own forward; a forward on the bare module, which is
+    what this loop did from 2026-09-14 to 2026-09-28, leaves every rank with its own gradient and no synchronisation.
+    State dicts pass through to the model, so checkpoints and exports keep the model's own parameter names."""
+
+    def __init__(self, inner):
+        super().__init__()
+        self.inner = inner
+        self.config = getattr(inner, "config", None)
+
+    def forward(self, batch: dict, device: torch.device, prefix_lm: str | None = None, mntp_weight: float = 1.0,
+                parts: dict | None = None) -> tuple[torch.Tensor, int, dict | None]:
+        # DDP rebuilds dict arguments when moving them to the device, so `parts` here may be a copy: it comes back
+        loss, n = model_loss(self.inner, batch, device, prefix_lm, mntp_weight, parts)
+        return loss, n, parts
+
+    def state_dict(self, *args, **kwargs):
+        return self.inner.state_dict(*args, **kwargs)
+
+    def load_state_dict(self, state_dict, strict: bool = True):
+        return self.inner.load_state_dict(state_dict, strict)
+
+
 def target_loss(model, batch: dict, device: torch.device, prefix_lm: str | None = None,
                 mntp_weight: float = 1.0, parts: dict | None = None) -> tuple[torch.Tensor, int]:
-    """Sum of cross-entropy over target tokens. Hidden states at the positions that predict a target
-    token go through lm_head; nothing else does. `prefix_lm` names the attention implementation when
-    the prompt is attended bidirectionally (E2); None keeps the causal mask (E1)."""
-    raw = model.module if isinstance(model, DDP) else model
-    if isinstance(raw, (ShardedHF, ShardedStitched)):
-        return raw(batch, device, prefix_lm)  # the root forward: FSDP2 gathers the root's parameters
+    """Sum of cross-entropy over target tokens and their count, routed so gradients synchronise: through the DDP
+    wrapper's forward (which arms the reducer), through the FSDP root unit's forward, or straight to a lone model."""
+    if isinstance(model, DDP):
+        loss, n, p = model(batch, device, prefix_lm, mntp_weight, parts)
+        if parts is not None and p is not None and p is not parts:
+            parts.update(p)
+        return loss, n
+    if isinstance(model, (ShardedHF, ShardedStitched)):
+        return model(batch, device, prefix_lm)  # the root forward: FSDP2 gathers the root's parameters
+    return model_loss(unwrap(model), batch, device, prefix_lm, mntp_weight, parts)
+
+
+def model_loss(raw, batch: dict, device: torch.device, prefix_lm: str | None = None,
+               mntp_weight: float = 1.0, parts: dict | None = None) -> tuple[torch.Tensor, int]:
+    """Sum of cross-entropy over target tokens for a bare (unwrapped, unsharded) model. Hidden states at the positions
+    that predict a target token go through lm_head; nothing else does. `prefix_lm` names the attention implementation
+    when the prompt is attended bidirectionally (E2); None keeps the causal mask (E1)."""
     labels = batch["labels"].to(device, non_blocking=True)
     if isinstance(raw, (Hybrid, Stitched, SoftStitched)):
         hidden = raw(batch["enc_ids"].to(device, non_blocking=True), batch["enc_mask"].to(device, non_blocking=True),
@@ -584,8 +633,7 @@ def full_state_dict(model) -> dict:
             get_model_state_dict,
         )
         return get_model_state_dict(model, options=StateDictOptions(full_state_dict=True, cpu_offload=True))
-    raw = model.module if isinstance(model, DDP) else model
-    return raw.state_dict()
+    return unwrap(model).state_dict()
 
 
 def save_checkpoint(path: Path, model, opt, step: int, epoch: int, cfg: TrainConfig, rank: int) -> None:
@@ -632,7 +680,7 @@ def latest_checkpoint(run_dir: Path) -> Path | None:
 def val_loss(model, examples: list[Example], idx: list[int], world: int, rank: int, device, pad_id: int,
              micro_tokens: int, prefix_lm: str | None, make_batch, mntp_weight: float = 1.0) -> float:
     model.eval()
-    raw = model.module if isinstance(model, DDP) else model
+    raw = unwrap(model)
     if isinstance(raw, Hybrid):
         raw.collect_cross_stats(True)
     total = torch.zeros(2, device=device)
@@ -718,7 +766,11 @@ def main() -> None:
         mask_prob = adapt.mask_prob
 
     def batch_seed(step: int, rank_: int, k: int) -> int:
-        return cfg.seed * 1_000_003 + step * 64 + rank_ * 8 + k
+        return cfg.seed * 1_000_003 + step * 4096 + rank_ * 256 + k  # room for 16 ranks and 256 micro-batches
+
+    # the continuation cut of a document depends only on the seed, the epoch and the document (never on where the document
+    # lands in a micro-batch), so two arms on the same data see the same cuts whatever their micro-batch size
+    cut_seed = [cfg.seed * 1_000_003]
 
     def step_denominator(st: Step, step: int) -> float:
         """Supervised tokens in the step over all ranks: planned target tokens (times the masked share under
@@ -727,21 +779,20 @@ def main() -> None:
             total = 0.0
             for r, rank_micro in enumerate(st.micro):
                 for k, micro in enumerate(rank_micro):
-                    sd = batch_seed(step, r, k)
-                    total += seq2seq_target_count(train, micro, sd, adapt.max_target, adapt.cut)
+                    total += seq2seq_target_count(train, micro, cut_seed[0], adapt.max_target, adapt.cut)
                     if mixed:  # expected masked encoder tokens
-                        total += mask_prob * seq2seq_encoder_count(train, micro, sd, adapt.max_target, adapt.cut)
+                        total += mask_prob * seq2seq_encoder_count(train, micro, cut_seed[0], adapt.max_target, adapt.cut)
             return total
         return st.target_tokens * supervised_share
 
     def make_batch(examples: list[Example], micro: list[int], seed: int) -> dict:
         if encdec:
-            b = collate_encdec(examples, micro, pad_id, start_id, seed, seq2seq,
+            b = collate_encdec(examples, micro, pad_id, start_id, cut_seed[0] if seq2seq else seed, seq2seq,
                                adapt.max_target if adapt else 2048, adapt.cut if adapt else (0.25, 0.75),
                                dec_prompt=cfg.model.decoder_sees_prompt, dec_start=not hybrid)
             return mask_encoder_side(b, mask_prob, mask_id, seed + 1) if mixed else b
         if seq2seq and adapt is not None:  # a decoder-only model under the continuation objective (E5's matched control)
-            return prepare(collate_continuation(examples, micro, pad_id, seed, adapt.max_target, adapt.cut, **pad_kw), seed)
+            return prepare(collate_continuation(examples, micro, pad_id, cut_seed[0], adapt.max_target, adapt.cut, **pad_kw), seed)
         return prepare(collate(examples, micro, pad_id, **pad_kw), seed)
 
     # loss normaliser per step: the group's target tokens, or their expected masked share under MNTP
@@ -791,7 +842,7 @@ def main() -> None:
     log(f"{steps_per_epoch} steps/epoch, {total_steps} total")
 
     if world > 1 and not is_sharded(model):
-        model = DDP(model, device_ids=[device.index], gradient_as_bucket_view=True)
+        model = DDP(LossWrapper(model), device_ids=[device.index], gradient_as_bucket_view=True)
     opt = ShardOptimizer(model, cfg) if is_sharded(model) else MasterOptimizer(model, cfg)
     step0 = 0
     if args.resume and (ck := latest_checkpoint(run_dir)):
@@ -807,7 +858,7 @@ def main() -> None:
             del shards
             opt.load_state_dict(torch.load(ck / f"optim-rank{rank}.pt", map_location=device))
         else:
-            raw = model.module if isinstance(model, DDP) else model
+            raw = unwrap(model)
             # loaded to CPU and copied into the live tensors: on the device the saved masters and optimizer state would
             # sit beside the live ones (about 12 GB at 2B parameters), which does not fit next to a 32 GB card's model
             raw.load_state_dict(torch.load(ck / "model.pt", map_location="cpu"))
@@ -832,9 +883,19 @@ def main() -> None:
     step = step0
     epoch = step // steps_per_epoch
     plan = plan_epoch(train, cfg.batch_sequences, cfg.micro_tokens, world, cfg.seed, epoch)
+    cut_seed[0] = cfg.seed * 1_000_003 + epoch
+
+    def step_lengths_of(st: Step) -> list[int]:
+        """Positions the model consumes per sequence in the step: whole sequences, or, under the continuation objective,
+        the prefix plus the capped continuation (the discarded tail of a cut document never enters a forward)."""
+        idx = [i for rank_micro in st.micro for micro in rank_micro for i in micro]
+        if seq2seq and adapt is not None:
+            cuts = seq2seq_cuts(train, idx, cut_seed[0], adapt.max_target, adapt.cut)
+            return [c + min(adapt.max_target, len(train[i].input_ids) - c) for i, c in zip(idx, cuts)]
+        return [len(train[i].input_ids) for i in idx]
 
     def step_tokens(st: Step) -> int:
-        return sum(len(train[i].input_ids) for rank_micro in st.micro for micro in rank_micro for i in micro)
+        return sum(step_lengths_of(st))
 
     tokens_seen = epoch * sum(step_tokens(s) for s in plan) + sum(step_tokens(s) for s in plan[:step % steps_per_epoch])
     window_flops, window_tokens, window_t0 = 0.0, 0, time.time()
@@ -849,6 +910,7 @@ def main() -> None:
         if step // steps_per_epoch != epoch:
             epoch = step // steps_per_epoch
             plan = plan_epoch(train, cfg.batch_sequences, cfg.micro_tokens, world, cfg.seed, epoch)
+            cut_seed[0] = cfg.seed * 1_000_003 + epoch
         st: Step = plan[step % steps_per_epoch]
         lr = lr_at(step, total_steps, cfg)
         opt.set_lr(lr)
@@ -885,17 +947,20 @@ def main() -> None:
         # throughput counters come from the plan, which every rank holds in full: no collective needed
         # (E2 showed the float64 all-reduce of these counters returning garbage in the window after a checkpoint:
         # the ranks had checkpointed one step apart, see do_ck above, and the mismatched collectives completed with junk)
-        step_lengths = [len(train[i].input_ids) for rank_micro in st.micro for micro in rank_micro for i in micro]
+        step_lengths = step_lengths_of(st)
         window_tokens += sum(step_lengths)
         window_flops += flops_of(n_flops_params, n_layers, d_model, step_lengths)
         tokens_seen += sum(step_lengths)
         if step % cfg.log_every == 0 or step == total_steps:
             dt = time.time() - window_t0
             mfu = window_flops / dt / (cfg.peak_tflops * 1e12 * world)
-            mem = torch.cuda.max_memory_allocated(device) / 2**30
+            mems = torch.zeros(world, device=device)  # every rank's peak, so the record has both cards
+            mems[rank] = torch.cuda.max_memory_allocated(device) / 2**30
+            if dist.is_initialized():
+                dist.all_reduce(mems)
             rec = {"step": step, "loss": loss_sum.item() / denom, "lr": lr, "grad_norm": grad_norm,
                    "tokens_seen": tokens_seen, "tokens_per_s": window_tokens / dt, "mfu": mfu,
-                   f"gpu{rank}_mem_gib": mem, "epoch": step / steps_per_epoch}
+                   **{f"gpu{r}_mem_gib": mems[r].item() for r in range(world)}, "epoch": step / steps_per_epoch}
             if window_comp[3] > 0:  # the two halves of the mixed objective, each over its own tokens in the window
                 rec["loss_seq2seq"] = window_comp[0].item() / max(1.0, window_comp[1].item())
                 rec["loss_mntp"] = window_comp[2].item() / max(1.0, window_comp[3].item())
@@ -938,6 +1003,9 @@ def main() -> None:
                 torch.save(sd, final / "encdec.pt")
                 base = cfg.model.base if not EncDec.is_encdec_dir(cfg.model.base) else json.loads((Path(cfg.model.base) / "encdec.json").read_text())["base"]
                 (final / "encdec.json").write_text(json.dumps({"base": base, "attn": attn, "lora_r": 0, "lora_alpha": 0}))
+            elif isinstance(model, ShardedStitched) and isinstance(model.hf, SoftStitched):
+                torch.save(sd, final / "soft.pt")
+                (final / "soft.json").write_text(json.dumps({"dec_base": model.hf.dec_base, "enc_base": model.hf.enc_base, "attn": attn}))
             elif isinstance(model, ShardedStitched):
                 torch.save(sd, final / "stitched.pt")
                 (final / "stitched.json").write_text(json.dumps({"enc_base": model.hf.enc_base, "dec_base": model.hf.dec_base, "attn": attn}))
@@ -949,7 +1017,7 @@ def main() -> None:
             log(f"final bf16 model -> {final} ({(time.time() - t_start) / 3600:.2f} h)")
         del sd
     elif not args.smoke and rank == 0:
-        raw = model.module if isinstance(model, DDP) else model
+        raw = unwrap(model)
         final = run_dir / "final"
         if isinstance(raw, (EncDec, Hybrid, Stitched, SoftStitched)):
             raw.save(final, tok)

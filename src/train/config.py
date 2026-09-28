@@ -29,7 +29,7 @@ class ModelConfig(BaseModel):
     # src/train/fit_stitch.py); everything trains, DDP. base may be a Stitched.save dir.
     # soft: E5, src/train/soft.py: the decoder-only model (base) exactly as in E1, reading at its prompt positions the text encoder
     # of encoder_base mapped into its embedding space by an affine stitch (`stitch`, fit_stitch.py --target-embeddings) instead
-    # of the token embeddings; no new attention; everything trains, DDP. base may be a SoftStitched.save dir.
+    # of the token embeddings; no new attention; everything trains, DDP or fsdp (the 4B-decoder arms). base may be a SoftStitched.save dir.
     arch: Literal["decoder", "encdec", "hf_encdec", "hybrid", "stitched", "soft"] = "decoder"
     encoder_base: str | None = None  # hybrid / stitched / soft: the encoder-decoder checkpoint whose text encoder is used
     stitch: Path | None = None  # stitched / soft: the fitted map (fit_stitch.py output); None = a fresh random map
@@ -120,10 +120,14 @@ class TrainConfig(BaseModel):
         return self.out_dir / self.name
 
     def wandb_tags(self) -> list[str]:
-        local = Path(self.model.base).exists()  # an adapted checkpoint: the original base comes in via tags
+        # an adapted checkpoint (possibly not yet trained): the original base comes in via tags
+        local = Path(self.model.base).exists() or self.model.base.startswith("checkpoints/")
         size = [] if local else [self.model.base.split("/")[-1]]
         stage = [f"adapt-{self.adapt.objective}"] if self.adapt else []
-        return sorted({self.experiment, self.model.base, *size, *stage, *self.tags})
+        # wandb caps tags at 64 characters, so a local checkpoint is tagged by its run directory, not its full path
+        base = Path(self.model.base)
+        base_tag = (base.parent.name if base.name == "final" else base.name) if local else self.model.base
+        return sorted({self.experiment, base_tag, *size, *stage, *self.tags})
 
 
 def load_config(path: Path) -> TrainConfig:
