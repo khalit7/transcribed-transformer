@@ -13,6 +13,8 @@ description: Launch a training run on the dual RTX 5090 machine. Use whenever st
 
 **Check the config is complete.** Configs are YAML under `configs/`. Adding a model, dataset or experiment means adding a class and pointing a config at it. If launching this run requires editing the training loop, stop: the abstraction is wrong and should be fixed instead.
 
+**Review first.** Run the `pre-run-review` skill: both Codex gpt-6-astra and an Opus agent review every changed line, the findings are fixed or rejected, and the tree hash is approved; the queue script's `gate.py check` refuses to launch otherwise.
+
 **Smoke first.** Run a handful of steps at the target sequence length before committing to a multi-day job. Confirm loss decreases, memory sits where expected, and a checkpoint writes and reloads. Confirm that gradient accumulation gives the same curve as the equivalent single step: completion-only loss with packing is exactly the configuration the per-micro-batch normalisation bug corrupts.
 
 ## Hardware
