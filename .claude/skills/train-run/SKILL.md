@@ -15,13 +15,13 @@ description: Launch a training run on the dual RTX 5090 machine. Use whenever st
 
 **Review first.** Run the `pre-run-review` skill: both Codex gpt-6-astra and an Opus agent review every changed line, the findings are fixed or rejected, and the tree hash is approved; the queue script's `gate.py check` refuses to launch otherwise.
 
-**Smoke first.** Run a handful of steps at the target sequence length before committing to a multi-day job. Confirm loss decreases, memory sits where expected, and a checkpoint writes and reloads. Confirm that gradient accumulation gives the same curve as the equivalent single step: completion-only loss with packing is exactly the configuration the per-micro-batch normalisation bug corrupts.
+**Smoke first.** Run a handful of steps at the target sequence length before committing to a multi-day job. Under DDP, confirm that a two-rank step reproduces the single-process full-batch gradient (the 2026-09-28 gradient-synchronisation bug would have failed this check). Confirm loss decreases, memory sits where expected, and a checkpoint writes and reloads. Confirm that gradient accumulation gives the same curve as the equivalent single step: completion-only loss with packing is exactly the configuration the per-micro-batch normalisation bug corrupts.
 
 ## Hardware
 
 Dual RTX 5090, Blackwell sm_120, 32GB each, **no NVLink**, PCIe.
 
-- CUDA 12.8+ and a PyTorch build with sm_120 kernels. FlashAttention 2 builds for sm_120 from source; **FlashAttention 3 is Hopper-only**, do not reach for it. E2's prefix-LM mask cannot be expressed in FlashAttention 2 and runs on FlexAttention; measure its throughput on this machine before relying on it, it is unpublished for sm_120.
+- CUDA 12.8+ and a PyTorch build with sm_120 kernels. FlashAttention 2 installs from the release wheel for sm_120; **FlashAttention 3 is Hopper-only**, do not reach for it. E2's prefix-LM mask cannot be expressed in FlashAttention 2 and runs on FlexAttention; measure its throughput on this machine before relying on it, it is unpublished for sm_120.
 - **Prefer DDP.** All-gather crosses PCIe without NVLink, so FSDP costs real throughput. Use FSDP only where memory forces it, and record the measured throughput cost when you do. Do not use context parallelism from Accelerate or TRL: it is SDPA-only and forbids packing.
 - Long context relies on FA2 varlen plus unpadding plus activation checkpointing, and on chunked or fused cross-entropy: at 32k tokens the logits tensor, not the weights, is what runs out of memory first.
 - bf16 mixed precision. This machine is also a desktop, so leave headroom rather than tuning to the last megabyte.
@@ -30,9 +30,9 @@ Dual RTX 5090, Blackwell sm_120, 32GB each, **no NVLink**, PCIe.
 
 Every run logs to wandb. There is no second logging path.
 
-- Projects: `tt-baselines` (E0), `tt-decoder` (E1, E2), `tt-encdec` (E3, E4, E5, E6), `tt-pretrain` (continued pretraining, adaptation stages, channel-model fitting).
+- Projects: `tt-decoder` (E1, E2), `tt-encdec` (E3, E4, E5, E6), `tt-pretrain` (continued pretraining, adaptation stages, channel-model fitting).
 - **Log the fully resolved config**, not a path to a YAML. The run must be reproducible from wandb alone.
-- **Mandatory tags**: experiment (`e0` to `e6`), base checkpoint (the HF id), size. Results tables are generated from the wandb API filtered on these tags. An untagged run is invisible to the results pipeline.
+- **Mandatory tags**: experiment (`e1` to `e6`), base checkpoint (the HF id), size. Results tables are generated from the wandb API filtered on these tags. An untagged run is invisible to the results pipeline.
 - **Always log**: loss, learning rate, grad norm, tokens seen, throughput (tokens/s and MFU), per-GPU memory. Throughput and MFU are how the project's compute estimates become measured facts rather than assumptions.
 - Version the tokenizer, ASR channel parameters and dataset build (`splits.json` version) as wandb artifacts so any result traces to the data that produced it.
 - `WANDB_API_KEY` from the environment, never committed.
@@ -41,7 +41,7 @@ Every run logs to wandb. There is no second logging path.
 
 Continued pretraining and adaptation stages run for days on a shared desktop. Assume interruption.
 
-- `WANDB_MODE=offline` with a later sync.
+- `WANDB_MODE=online`, so losses appear live (the owner's standing rule; offline only when explicitly requested).
 - Checkpoint on a wall-clock interval, not only on step count, and **verify resume actually works** by killing and resuming once early in the run.
 - Resume must restore optimiser state, LR schedule position, data loader position and RNG state. A resume that silently restarts the data order corrupts a matched comparison without any visible error.
 - Launch in the background so the session is not held open.

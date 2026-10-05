@@ -1,0 +1,43 @@
+# Adaptation stage for E5++ with the 1b encoder into the Gemma 3 270M decoder (D56: how our stitching recipe compares with a native
+# encoder-decoder, cell by cell): the T5Gemma 2 1b text encoder (1152 wide, ~1.0B) into Gemma 3 270M (640 wide) through a stitch fitted by
+# ridge regression onto the decoder's scaled token embeddings (checkpoints/stitch/1b-to-gemma3-270m-embed.pt, src/train/fit_stitch.py
+# --target-embeddings). The continuation objective on the ++ outside-text sample as every other stage: the encoder reads the prefix,
+# the decoder's prefix positions carry the stitched states, up to 2,048 tokens of the continuation predicted, loss on the continuation
+# only. Everything trains, stitch at 10x; ~1.27B, DDP. Native counterpart: the mix-and-match 1b encoder + 270m native decoder (0.724 / 0.646); control: E1++ on Gemma 3 270M.
+experiment: e5
+name: adapt-continuation-corpora-e5-t5gemma2-1b-enc-gemma3-270m
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-270m                  # the decoder, E1's
+  encoder_base: google/t5gemma-2-1b-1b   # the encoder donor
+  stitch: checkpoints/stitch/1b-to-gemma3-270m-embed.pt
+  arch: soft
+  decoder_sees_prompt: true
+  attn: flash_attention_2   # the decoder; the T5Gemma 2 encoder has no flash-attention path and runs under sdpa
+  gradient_checkpointing: true
+adapt:
+  objective: seq2seq
+  max_target: 2048
+  cut: [0.25, 0.75]
+  corpora:   # the E1++/E2++ outside-text sample; labelled calls excluded
+    - {path: data/interim/callcenteren/train.jsonl, docs: 88933, val_docs: 100}
+    - {path: data/interim/sporc/train.jsonl, docs: 35000, val_docs: 40}
+    - {path: data/interim/meetingbank/train.jsonl, docs: 1218, val_docs: 10}
+    - {path: data/interim/courtlistener/train.jsonl, docs: 6400, val_docs: 10}
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 500
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-pretrain
+tags: [adapt, continuation, corpora, soft-tokens, google/gemma-3-270m, enc-google/t5gemma-2-1b-1b]

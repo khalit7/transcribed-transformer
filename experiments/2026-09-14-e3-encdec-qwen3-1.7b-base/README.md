@@ -1,6 +1,8 @@
 # E3: encoder-decoder built from Qwen3-1.7B-Base
 
-The encoder-decoder arm of the README's "Design" table, written before the run on 2026-09-14. My reading of the prefix-LM line (E2, E2+, E2++): the bidirectional arm improved monotonically with adaptation and reached parity on answers with a small lead on evidence, so bidirectional reading has "a little bit of promise" and deserves a dedicated encoder.
+The encoder-decoder arm of the README's "Design" table, written before the run on 2026-09-14. My reading of the prefix-LM line (E2, E2+, E2++): the bidirectional arm improved monotonically with adaptation and reached parity on answers with a small lead on evidence, so bidirectional reading shows a little promise and deserves a dedicated encoder.
+
+> **Gold and cell as scored here (note added 2026-09-29).** The benchmark numbers in this record were scored against the pre-D61 mixed gold (the training labeller's answer where a second local labeller agreed, Opus's where they disagreed or where Sonnet said `fail`, with union evidence keys) and their unseen-question figures include the twenty held-out questions that have twins in training. From 2026-09-29 every result is reported under two golds, gold = teacher (the training labeller's own label, the headline) and gold = opus (Opus's label on the 4,012 pairs it labelled), with the no-twin held-out slice as the zero-shot number; the re-run record (`experiments/2026-09-28-rerun-under-the-fixed-loop/`) and the README carry those. The predictions and readings below are kept as written.
 
 ## Hypothesis
 
@@ -44,7 +46,7 @@ Against it: RedLLM (arXiv 2510.26622) found the prefix-LM decoder beat their enc
 
 E3 started the task far behind (3.15 before any update: a decoder trained to emit transcript continuations through cross-attention, asked for JSON judgements) and then improved at the same rate as E1 rather than faster: the gap to E1 was 0.372, 0.360, 0.351 at steps 200, 400, 600, against 0.11 → 0.016 for E2 over a whole run. Training loss on the same batches: 2.28 / 1.43 / 1.26 / 1.01 / 0.92 at steps 10, 50, 100, 200, 600 (E1: 1.07 / 1.28 / 0.79 / 0.70 / 0.58). Throughput 8.3k tokens/s sharded, peak 25 GiB per GPU.
 
-The run was stopped at step ~620 by a stopping rule fixed after the step-200 val, before the outcome was known: continue to step 600, stop if the val gap to E1 is still above 0.20. It was 0.35. At E1's own rate of improvement the run would have ended near 0.85 against E1's 0.503, so the benchmark was not generated; the step-514 checkpoint is kept under `checkpoints/e3-qwen3-1.7b-base/` and the fine-tune can be resumed if a benchmark number is wanted regardless.
+The run was stopped at step ~620 by a stopping rule fixed after the step-200 val, before the outcome was known: continue to step 600, stop if the val gap to E1 is still above 0.20. It was 0.35. At E1's own rate of improvement the run would have ended near 0.85 against E1's 0.503, so the benchmark was not generated; the step-514 checkpoint was kept under `checkpoints/e3-qwen3-1.7b-base/` until the 2026-09-28 cleanup deleted it with the DDP runs' weights, so the fine-tune can no longer be resumed if a benchmark number is wanted regardless.
 
 ## Verdict
 
@@ -56,7 +58,7 @@ Combined with E2, E2+ and E2++: at 1.7B, on this task and data, no bidirectional
 
 ## Follow-ups
 
-- If a measured E3 benchmark is wanted for the record: resume the fine-tune from step 514 (about 6 hours) and evaluate with `--backend encdec`.
+- If a measured E3 benchmark is wanted for the record: the step-514 checkpoint was deleted in the 2026-09-28 cleanup, so it needs a fresh fine-tune from the adaptation stage's export (also deleted; the stage would have to be re-run too, about a day in all) and an evaluation with `--backend encdec`.
 - The most plausible rescue, not recommended at this size: a much larger adaptation (billions of tokens) or fine-tuning E3 at a higher learning rate for the cross-attention path than for the rest; either breaks the matched recipe with E1.
 - The 4B scale point for E1, and E2 at 4B, are the remaining architecture questions worth GPU time; E3 at 4B is not, on this evidence.
 - The frozen-encoder designs (retired from the design table by the 2026-09-25 re-labelling; parked in the notes) stay behind their probe gate; nothing here argues for opening it.

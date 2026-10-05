@@ -72,6 +72,6 @@ Synthetic documents land in `data/interim/<source>-synth/` with the channel or p
 
 ## 8. State
 
-The self-ASR pipeline is live: `scripts/transcribe.py` (faster-whisper large-v3, float16, word timestamps; telephone degradation per §5 minus codec/noise, which wait on ffmpeg). Measured 2026-09-01 on one RTX 5090: **20x realtime** on a smoke-test call. First production pass (AppTek diarization config, 873 calls) running; the split-channel pass and the channel-v2 fit follow once the AppTek `test` audio finishes downloading. The TTS route is not started. Nothing on this sheet has produced *training* data yet.
+*(Status as of 2026-09-01; the production passes and the channel-v2 fit described below have since completed, see the later sections and the DATASHEET.)* The self-ASR pipeline is live: `scripts/transcribe.py` (faster-whisper large-v3, float16, word timestamps; telephone degradation per §5 minus codec/noise, which wait on ffmpeg). Measured 2026-09-01 on one RTX 5090: **20x realtime** on a smoke-test call. First production pass (AppTek diarization config, 873 calls) running; the split-channel pass and the channel-v2 fit follow once the AppTek `test` audio finishes downloading. The TTS route is not started. Nothing on this sheet has produced *training* data yet.
 
 Keep this file current when a recipe, model choice, or QC gate changes.

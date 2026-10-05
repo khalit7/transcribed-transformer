@@ -2,6 +2,8 @@
 
 The control arm of the README's "Design" table. Entry written 2026-09-10 after launch and after the training curve, before any benchmark number (the hypothesis below was the one the run was launched under; nothing in it was changed after scoring).
 
+> **Gold and cell as scored here (note added 2026-09-29).** The benchmark numbers in this record were scored against the pre-D61 mixed gold (the training labeller's answer where a second local labeller agreed, Opus's where they disagreed or where Sonnet said `fail`, with union evidence keys) and their unseen-question figures include the twenty held-out questions that have twins in training. From 2026-09-29 every result is reported under two golds, gold = teacher (the training labeller's own label, the headline) and gold = opus (Opus's label on the 4,012 pairs it labelled), with the no-twin held-out slice as the zero-shot number; the re-run record (`experiments/2026-09-28-rerun-under-the-fixed-loop/`) and the README carry those. The predictions and readings below are kept as written.
+
 ## Hypothesis
 
 A 1.7B causal decoder, fine-tuned with the loss on the answer only, learns the task format and enough of the judgements to beat the majority-class predictor on questions it has never seen, from ~90k labelled pairs and one epoch. This is the floor every other arm is measured against; E2 (prefix-LM, same checkpoint, same data, mask only) is the first comparison.
@@ -22,13 +24,13 @@ A 1.7B causal decoder, fine-tuned with the loss on the answer only, learns the t
 
 ## wandb run
 
-[tt-decoder/nxxkzq91](https://wandb.ai/khalit7-/tt-decoder/runs/nxxkzq91)
+[tt-decoder/nxxkzq91](https://wandb.ai/khalit7-/tt-decoder/runs/nxxkzq91) (deleted 2026-09-28; export in `checkpoints/_archive/e1-qwen3-1.7b-base-ddp-bug/wandb_export.json`; not re-run)
 
 ## Result
 
 > **Run had bugs, so don't trust these results fully.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients: each rank trained its own replica on its half of every step and rank 0's replica was saved, so every number below is for a model trained on half the data at an effective batch of 16 (notes, D58; [the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)). Comparisons between the arms of this record stay matched, the same defect being on both sides; absolute numbers, and comparisons against FSDP-trained arms, are not. This run is not being re-run.
 
-Read from wandb `tt-decoder/nxxkzq91` (training summary and the `bench/*` keys logged by `src/train/evaluate.py`; full tables in `checkpoints/e1-qwen3-1.7b-base/eval/benchmark/results.md`).
+Read from wandb `tt-decoder/nxxkzq91` (training summary and the `bench/*` keys logged by `src/train/evaluate.py`; full tables in `checkpoints/_archive/e1-qwen3-1.7b-base-ddp-bug/eval/benchmark/results.md`).
 
 Training: 2,859 steps, 4.61 h on two GPUs, 15.1k tokens/s, MFU 0.42, val loss 1.18 → 0.503 (monotone, still falling at the end of the epoch).
 
@@ -61,4 +63,4 @@ Two caveats on reading the numbers. The gold is model-produced (qwen3.8 and gemm
 - Runaway outputs: 1.7% of generations loop or enumerate every line. Score stays on raw output per the eval-bench rules; the fix, if wanted, is a training-side one (more epochs, or a repetition penalty applied uniformly to every arm and recorded).
 - A second epoch or a higher learning rate (val loss still falling at the end).
 - Summary faithfulness is unscored (needs the LLM-as-a-judge step).
-- E0 (API baseline) on the same prompt, so the "beat the baseline on quality and cost" gate has its other side.
+- The API baseline that was to sit beside this arm was withdrawn on 2026-09-29 (its record explains why).

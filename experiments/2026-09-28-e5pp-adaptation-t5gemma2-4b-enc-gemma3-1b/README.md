@@ -4,9 +4,11 @@ Written before the run, 2026-09-28 16:00. Companion to the
 [1b-encoder](../2026-09-26-e5pp-adaptation-t5gemma2-1b-enc-gemma3-1b/README.md) and
 [270m-encoder](../2026-09-27-e5pp-adaptation-t5gemma2-270m-enc-gemma3-1b/README.md) adaptation pairs.
 
+> **Gold and cell as scored here (note added 2026-09-29).** The benchmark numbers in this record were scored against the pre-D61 mixed gold (the training labeller's answer where a second local labeller agreed, Opus's where they disagreed or where Sonnet said `fail`, with union evidence keys) and their unseen-question figures include the twenty held-out questions that have twins in training. From 2026-09-29 every result is reported under two golds, gold = teacher (the training labeller's own label, the headline) and gold = opus (Opus's label on the 4,012 pairs it labelled), with the no-twin held-out slice as the zero-shot number; the re-run record (`experiments/2026-09-28-rerun-under-the-fixed-loop/`) and the README carry those. The predictions and readings below are kept as written.
+
 ## Hypothesis
 
-> **Comparator numbers in this record come from runs with a bug.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients (half the data at batch 16), so every trained-arm number quoted here as a bar or reference (the native pairs, the mix-and-match arms, the 1B and 270M decoders, E1++ and E5++) is from a buggy run being replaced by a re-run ([the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)); read the predictions against the re-run numbers when they land.
+> **Comparator numbers in this record come from runs with a bug.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients (half the data at batch 16), so every trained-arm number quoted here as a bar or reference (the native pairs, the mix-and-match arms, the 1B and 270M decoders, E1++ and E5++) is from a buggy run being replaced by a re-run ([the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)); the predictions are read against the re-run numbers in the re-run record (queue 30, complete 2026-10-05). *The DDP arms among those (the native pairs, the 1B mix-and-match arms, the 1B and 270M decoders, E1++ and E5++) have since been re-run under the fixed loop (queue 30, complete 2026-10-05); the FSDP arms quoted (the 4B mix-and-match arms, Gemma 3 4B, SmolLM3) were sound as run. The sound numbers are in the re-run record.*
 
 E5++ with the 1b encoder beat its matched control on every metric (0.671 / 0.505 against E1++'s 0.650 / 0.470 on clean
 macro-F1 / unseen-question macro-F1, evidence F1 0.591 against 0.532). The mix-and-match grid said that capacity pays in
@@ -53,7 +55,7 @@ soft-token interface gets from the same encoder.
 - Generation `--backend soft --batch-tokens 40000` (the 4B encoder's budget), scored by `src/train/evaluate.py`.
 - Code as the 1b pair, plus the soft model's FSDP path and tied-head handling added for the 4B-decoder configs
   (`experiments/` records under D53); 30 tests + 1 GPU skip.
-- wandb: adaptation stage in tt-pretrain, fine-tune in tt-encdec; run ids TBD.
+- wandb: none; the arm was aborted on 2026-09-28 before a wandb run was created (full-parameter training does not fit the local cards) and moved to the rented-hardware list.
 
 ## Result
 

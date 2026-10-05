@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from pathlib import Path
 
 # Ollama endpoints, one per GPU (ollama_servers.ensure_servers() starts them on demand; OLLAMA_URLS overrides).
 # A caller picks one per call (`ollama_url(key)`) so a call's questions share that server's prefix cache.
@@ -111,10 +112,20 @@ def _raise_claude(msg: str) -> None:
     raise LLMError(msg[-500:])
 
 
+# `claude -p` loads CLAUDE.md, memory and its file tools from the working directory it starts in. A labeller must not see
+# this repository (its instructions, its notes, its other labels), so every call starts from an empty directory. Until
+# 2026-09-29 the calls started from the repository root (see the DATASHEET's known limitations of the labelled data).
+CLAUDE_CWD = Path(os.environ.get("LABEL_CLI_CWD", "/tmp/claude-empty-cwd"))
+
+
 def _claude(prompt: str, name: str, timeout: int) -> tuple[dict, float]:
-    proc = subprocess.run(["claude", "-p", "--model", name, "--output-format", "json"],  # noqa: PLW1510
-                          input=prompt, capture_output=True, text=True, timeout=timeout,
-                          env={**os.environ, **_claude_env})
+    CLAUDE_CWD.mkdir(parents=True, exist_ok=True)
+    try:
+        proc = subprocess.run(["claude", "-p", "--model", name, "--output-format", "json"],  # noqa: PLW1510
+                              input=prompt, capture_output=True, text=True, timeout=timeout,
+                              env={**os.environ, **_claude_env}, cwd=CLAUDE_CWD)
+    except subprocess.TimeoutExpired as e:  # a timed-out call is a failed call, retried like any other, never a crash
+        raise LLMError(f"claude -p timed out after {timeout}s") from e
     if proc.returncode != 0:
         _raise_claude((proc.stderr + "\n" + proc.stdout).strip())
     envelope = json.loads(proc.stdout)

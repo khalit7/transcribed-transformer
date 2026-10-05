@@ -1,0 +1,30 @@
+# E5++ with the 270m encoder: the 270m E5 fine-tune (configs/e5/t5gemma2-270m-enc-gemma3-1b.yaml, 0.636 / 0.461 against the
+# control's 0.651 / 0.496) started from the corpora-scale continuation-adapted 270m soft-token model
+# (configs/adapt/continuation-corpora-e5-t5gemma2-270m-enc-gemma3-1b.yaml). 16k micro-batches as the 270m E5 fine-tune ran. Read against
+# E1++ (configs/e1/gemma3-1b-pt-plusplus.yaml, the shared control) and against the 1b E5++: does adaptation close the 270m encoder's deficit.
+experiment: e5
+name: e5pp-t5gemma2-270m-enc-gemma3-1b
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: checkpoints/adapt-continuation-corpora-e5-t5gemma2-270m-enc-gemma3-1b/final   # a SoftStitched.save dir: encoder, stitch and decoder
+  arch: soft
+  decoder_sees_prompt: true
+  attn: flash_attention_2
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-encdec
+tags: [soft-tokens, adapted, google/gemma-3-1b-pt, enc-google/t5gemma-2-270m-270m, full-params, corpora, control-e1pp-gemma3-1b-pt]

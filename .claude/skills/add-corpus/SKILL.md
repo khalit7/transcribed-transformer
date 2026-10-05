@@ -46,12 +46,12 @@ Record the tier, the evidence for it, and for tier 3 an explicit justification o
 
 ## 3. Loader
 
-One module per corpus in `data/loaders/`, emitting the pydantic types from `data/schema.py`. Nothing downstream ever sees a corpus-specific format.
+One module per corpus in `src/preprocessing/`, emitting the canonical `Document` schema from `src/preprocessing/common.py` (all code lives in `src/`; `data/` holds only data). Nothing downstream ever sees a corpus-specific format.
 
 The loader is responsible for normalising into the canonical form:
 
 - **Speaker-labelled turns, one turn per line**, with a stable line index. The line index is what evidence labels refer to, so it must be deterministic across runs.
-- Speaker roles mapped onto the project's role vocabulary where the corpus supports it, otherwise left as opaque speaker ids.
+- Speaker labels kept verbatim as the corpus gives them (the canonical rendering is `<n>: <role>: <text>` with the corpus's own role or speaker id; no mapping onto a project vocabulary, which would change the model input).
 - Verbatim text preserved. **Do not strip disfluencies, fillers, repetitions or repairs.** They are signal here, not noise.
 - Where a corpus ships more than one transcript layer, the loader exposes a `variant` parameter rather than silently picking one, and defaults to the highest tier available. A loader that hard-codes the human transcript when an ASR layer exists is a bug even though nothing downstream will complain.
 - Declared `track` field on every record, so a mixed-track batch is detectable at runtime rather than discovered in a results table.

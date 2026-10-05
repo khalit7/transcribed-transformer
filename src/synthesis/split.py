@@ -271,11 +271,17 @@ def load_splits(path: Path = SPLITS) -> dict:
 def assign(record: dict, splits: dict) -> str:
     """train | val | benchmark | drop for one ledger record (drop = held-out question on a train/val call, or a
     partially labelled sibling of a benchmark call)."""
-    side = splits["calls"].get(record["id"].split("::")[0], "train")
+    cid = record["id"].split("::")[0]
+    side = splits["calls"].get(cid)
+    if side is None:  # a call labelled after the freeze: a SPoRC episode follows its podcast's side, so a sibling of a
+        g = group_key(record.get("dataset", ""), cid, record.get("meta") or {})  # benchmark or val episode never reaches train
+        side = {"benchmark": "excluded", "excluded": "excluded", "val": "val"}.get(splits.get("groups", {}).get(g), "train")
     if side == "excluded":
         return "drop"
-    if side != "benchmark" and record["question"]["id"] in splits.get("_held", set(splits["held_out_questions"])):
-        return "drop"
+    qid = record["question"]["id"]
+    if side != "benchmark" and (qid in splits.get("_held", set(splits["held_out_questions"]))
+                                or lineage(qid) in set(splits.get("held_out_lineages", []))):
+        return "drop"  # by frozen id and by lineage, so a variant of a held-out question added after the freeze is held out too
     return side
 
 

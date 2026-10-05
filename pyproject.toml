@@ -1,7 +1,7 @@
 [project]
 name = "transcribed-transformer"
 version = "0.1.0"
-description = "Compliance QA over ASR call transcripts: decoder vs encoder-decoder vs API baseline"
+description = "Compliance QA over ASR call transcripts: decoder-only against encoder-decoder designs at matched size"
 requires-python = ">=3.11"
 dependencies = [
     "accelerate>=1.15.0",

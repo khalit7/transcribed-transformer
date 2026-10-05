@@ -162,13 +162,17 @@ class LabelledRecord(BaseModel):
 
 
 class Provenance(BaseModel):
-    """How a benchmark record's gold label was settled (benchmark.py)."""
-    method: Literal["single", "agreement", "adjudicated", "pending"]
+    """Who labelled a benchmark record (benchmark.py). `method` is `teacher` for every record built from 2026-09-29 on
+    (the headline gold is the training labeller's own label; the older values name how a mixed gold was settled)."""
+    method: Literal["teacher", "single", "agreement", "adjudicated", "blind", "pending"]
     labels: dict[str, Answer]  # every labeller's answer, keyed by labeller name
-    adjudicator: str | None = None  # the labeller whose label is the gold label when adjudicated
+    opus_labeller: str | None = None  # the labeller whose label is `opus_label` (Opus; `claude:opus blind` for a blind pass), when there is one
+    adjudicator: str | None = None  # older records: the labeller whose label was the gold when adjudicated or blind
 
 
 class BenchmarkRecord(LabelledRecord):
-    """A LabelledRecord whose `label` is the reconciled gold label; `generation_info` is the ledger's."""
+    """A LabelledRecord with two golds: `label` is the teacher's (the ledger label as the training labeller produced it,
+    the headline gold) and `opus_label` Opus's where Opus labelled the pair; `generation_info` is the ledger's."""
     cell: Literal["seen_q", "unseen_q"]  # was the question in the training question set?
     provenance: Provenance
+    opus_label: Label | None = None

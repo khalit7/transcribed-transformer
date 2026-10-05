@@ -2,6 +2,8 @@
 
 Written before the run on 2026-09-15, after the Qwen-built encoder-decoder (`../2026-09-14-e3-encdec-qwen3-1.7b-base/`) was stopped for trailing E1 by 0.35 in val loss. The encoder idea still deserved a fairer test, so this arm uses a native encoder-decoder, T5Gemma 2, starting with the 1b-1b.
 
+> **Gold and cell as scored here (note added 2026-09-29).** The benchmark numbers in this record were scored against the pre-D61 mixed gold (the training labeller's answer where a second local labeller agreed, Opus's where they disagreed or where Sonnet said `fail`, with union evidence keys) and their unseen-question figures include the twenty held-out questions that have twins in training. From 2026-09-29 every result is reported under two golds, gold = teacher (the training labeller's own label, the headline) and gold = opus (Opus's label on the 4,012 pairs it labelled), with the no-twin held-out slice as the zero-shot number; the re-run record (`experiments/2026-09-28-rerun-under-the-fixed-loop/`) and the README carry those. The predictions and readings below are kept as written.
+
 ## Hypothesis
 
 The Qwen-built encoder-decoder failed at the transfer, and the cleanest explanation is adaptation budget: 661M tokens against the roughly 2T tokens Google spent turning Gemma 3 into T5Gemma 2. A converged encoder-decoder removes that variable. If an encoder-decoder that has already paid its adaptation cost beats the decoder it was made from on this task, the encoder idea survives and our E3 failed for budget; if it does not, a dedicated bidirectional encoder does not help this task at about 1B parameters however well it is trained.
@@ -27,14 +29,14 @@ This is a matched pair from one family, not a comparison with the Qwen arms: T5G
 
 - T5Gemma 2, attempt 1: tt-encdec/bivp95p4 (crashed run, deleted from wandb on 2026-09-25; its train log is archived under `checkpoints/_archive/`), 2026-09-15 23:55 → 00:26, hung at step 303 in an NCCL all-reduce at its first checkpoint (no checkpoint written; 2-hour watchdog). Val 1.458 at step 0, 0.833 at step 200.
 - T5Gemma 2, attempt 2: tt-encdec/3spaw5sg (crashed run, deleted from wandb on 2026-09-25; its train log is archived under `checkpoints/_archive/`), 2026-09-16 02:29 → 05:00, hung at the same step; the NCCL flight recorder showed the two ranks entering the wall-clock checkpoint one step apart (each rank read its own clock), so their collectives paired wrongly. Fixed: rank 0 decides and broadcasts.
-- T5Gemma 2, attempt 3: [tt-encdec/1a1kxss8](https://wandb.ai/khalit7-/tt-encdec/runs/1a1kxss8), from step 0 at 2026-09-16 05:02.
-- Gemma 3 1B: [tt-decoder/om6sbier](https://wandb.ai/khalit7-/tt-decoder/runs/om6sbier), started 2026-09-16 12:23.
+- T5Gemma 2, attempt 3: [tt-encdec/1a1kxss8](https://wandb.ai/khalit7-/tt-encdec/runs/1a1kxss8) (deleted 2026-09-28; export in `checkpoints/_archive/e4-t5gemma2-1b-1b-ddp-bug/wandb_export.json`; fixed re-run `18lyydir`), from step 0 at 2026-09-16 05:02.
+- Gemma 3 1B: [tt-decoder/om6sbier](https://wandb.ai/khalit7-/tt-decoder/runs/om6sbier) (deleted 2026-09-28; export in `checkpoints/_archive/e1-gemma3-1b-pt-ddp-bug/wandb_export.json`; fixed re-run `satuk1fl`), started 2026-09-16 12:23.
 
 ## Result
 
-> **The numbers below come from a run with a bug and are being replaced.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients (each rank trained its own replica on its half of every step; rank 0's was saved), so these are for a model trained on half the data at an effective batch of 16. The run is in the re-run queue under the fixed loop ([the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)); its replacement's numbers replace these when scored.
+> **Superseded: the numbers below are the abandoned DDP-bug run's, kept as history; the re-run under the fixed loop is scored and reported in the re-run record (`../2026-09-28-rerun-under-the-fixed-loop/`) and in the dated re-read note under Verdict.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients (each rank trained its own replica on its half of every step; rank 0's was saved), so these are for a model trained on half the data at an effective batch of 16. The replacement ran in queue 30 and is scored../2026-09-28-rerun-under-the-fixed-loop/README. The replacement's numbers are in the re-run record and in the re-read note under Verdict; these stay as history.
 
-**T5Gemma 2 1b-1b** (attempt 3, 2026-09-16 05:02 → 09:48, 4.77 h, 2,858 steps; generation 2.6 h on two GPUs through the library's generate; scored 12:23). Val loss 1.458 → 0.831 (200) → 0.680 (1000) → 0.571 (2000) → 0.529 (2858). Benchmark, read from `checkpoints/e4-t5gemma2-1b-1b/eval/benchmark/results.md` (also logged to the wandb run under `bench/*`), with E1 (Qwen3-1.7B-Base, different family, context only) and E2++ beside it:
+**T5Gemma 2 1b-1b** (attempt 3, 2026-09-16 05:02 → 09:48, 4.77 h, 2,858 steps; generation 2.6 h on two GPUs through the library's generate; scored 12:23). Val loss 1.458 → 0.831 (200) → 0.680 (1000) → 0.571 (2000) → 0.529 (2858). Benchmark, read from `checkpoints/_archive/e4-t5gemma2-1b-1b-ddp-bug/eval/benchmark/results.md` (also logged to the wandb run under `bench/*`), with E1 (Qwen3-1.7B-Base, different family, context only) and E2++ beside it:
 
 | variant / slice | metric | T5Gemma 2 1b-1b | Gemma 3 1B (control) | E1 Qwen3-1.7B | E2++ |
 |---|---|---|---|---|---|
@@ -61,6 +63,8 @@ Reading before the control lands: the converged encoder-decoder, at 1.7B trainab
 
 ## Verdict
 
+> **Re-read under gold = teacher (2026-09-29).** The pair, both sides re-run under the fixed loop: the 1b-1b leads the Gemma 3 1B decoder by 0.097 clean macro-F1 and 0.198 on the no-twin zero-shot slice. Against the parameter-matched decoders (all abandoned DDP-bug runs, matched with the 1b-1b's own buggy predecessor) the zero-shot edge reverses against Qwen3-1.7B on the no-twin slice (0.665 against 0.675 clean, 0.630 against 0.670 messy); the 1b-1b's matched-size edge is evidence (+0.034 over Qwen3, +0.027 over Hunyuan, +0.075 over Qwen2.5) and marginally overall answers. With the Qwen2.5-1.5B control re-run under the fixed loop (2026-10-02: 0.751 / 0.613, evidence F1 0.650), the fixed 1b-1b leads it by +0.043 macro-F1, +0.073 no-twin and +0.074 evidence F1 under the teacher gold and by +0.040 / +0.052 / +0.046 under Opus's, a sound cross-family comparison on every headline number. With Hunyuan-1.8B also re-run (0.774 / 0.619, evidence F1 0.692, the strongest sound cross-family control), the fixed 1b-1b leads it by +0.020 macro-F1, +0.067 no-twin and +0.032 evidence F1 under the teacher gold and by +0.009 / +0.033 / +0.016 under Opus's (level on messy answers under Opus, −0.009): the native pair's lead over the matched decoders is on zero-shot and evidence first, answers second. Against the sound Gemma 3 4B and SmolLM3-3B decoders the fixed-loop 1b-1b is level: within 0.011 macro-F1 and 0.005 evidence F1, and ahead on the clean complaint and vulnerability families.
+
 **Confirmed, as predicted, with the confound the design accepted.** The prediction asked for at least +0.02 unseen-question macro-F1 on both variants; the measured margins are +0.181 and +0.149, and val loss, evidence and format all agree. A converged encoder-decoder beats the decoder it was made from on this task by a wide margin at about 1B, and it also sits at or above the 1.7B Qwen causal decoder (E1) on most slices while being a different family.
 
 What it does not separate: T5Gemma 2 is Gemma 3 1B plus about 2T tokens of further training plus a second tower (1.7B trainable parameters against 1.0B). The pair attributes the gain to "architecture plus adaptation", which is what a native model can offer; the one-variable version of this question (our E3, 661M adaptation tokens on the Qwen weights) failed, and this result says the failure was about budget and not about the idea. The weak control is part of the finding, not a flaw in it: Gemma 3 1B pretrained, under the E1 recipe, does not generalise to unseen questions at all, and the adapted encoder-decoder from the same weights does.
@@ -71,12 +75,12 @@ For the README's E4 row: the native reference is now the strongest trained model
 
 ## Size control: T5Gemma 2 270m-270m (added 2026-09-16, before its run)
 
-> **Buggy run, being re-run** (the 2026-09-28 DDP bug; see the note under Result).
+> **Abandoned DDP-bug run, since re-run under the fixed loop** (the 2026-09-28 DDP bug; see the note under Result and the re-read note under Verdict).
 
 A confound in the pair result: the 1b-1b has the most parameters of the models compared, so size alone may explain part of the gap. Against its control it does have twice the non-embedding parameters (1.40B against 0.70B); against E1 it is parameter-matched (1.41B), and per prompt token it costs what Gemma 3 1B costs, since only the encoder reads the prompt. The cheap test: T5Gemma 2 270m-270m (encoder and decoder each 18 layers, hidden 640; about 0.2B non-embedding parameters in total, under a third of Gemma 3 1B's 0.70B) under the identical recipe, `configs/e4/t5gemma2-270m-270m.yaml`.
 
 - **Prediction.** If the 1b-1b margin is architecture plus adaptation rather than size, the 270m-270m lands at or above Gemma 3 1B on unseen-question macro-F1 on both variants (0.496 clean, 0.493 messy) and above the majority predictor there (0.582 / 0.572). **Size is confirmed as part of the explanation if** the 270m-270m falls clearly below the 1B decoder on unseen questions on both variants; a result between the control and the 1b-1b is the mixed case and gets reported as such.
-- wandb: [tt-encdec/o0lbp362](https://wandb.ai/khalit7-/tt-encdec/runs/o0lbp362), started 2026-09-16 16:50; 0.37B trainable parameters (0.79B with the frozen image tower); val loss 2.026 at step 0.
+- wandb: [tt-encdec/o0lbp362](https://wandb.ai/khalit7-/tt-encdec/runs/o0lbp362) (deleted 2026-09-28; export in `checkpoints/_archive/e4-t5gemma2-270m-270m-ddp-bug/wandb_export.json`; fixed re-run `eomeqls2`), started 2026-09-16 16:50; 0.37B trainable parameters (0.79B with the frozen image tower); val loss 2.026 at step 0.
 - **Result** (2026-09-16 16:50 → 19:12 training, 2.35 h; generation 1.8 h; scored 21:02). Val loss 2.026 (0) → 1.015 (200) → 0.814 (1000) → 0.704 (2000) → 0.667 (2858): below the 1B decoder (0.632) by 0.035–0.09 throughout. Benchmark, clean / messy:
 
 | metric | 270m-270m (0.2B non-emb) | Gemma 3 1B (0.7B) | 1b-1b (1.4B) |
@@ -95,12 +99,12 @@ A confound in the pair result: the 1b-1b has the most parameters of the models c
 
 ## The small pair: Gemma 3 270M control (added 2026-09-16 23:00, before its run)
 
-> **Buggy runs, being re-run** (both sides of this pair; the 2026-09-28 DDP bug).
+> **Abandoned DDP-bug runs, both since re-run under the fixed loop** (the 2026-09-28 DDP bug; the sound pair is in the re-read note under Verdict and in the re-run record).
 
 Next: run the decoder-only version of every model that has an encoder-decoder twin. Three same-family pairs (270m, 1b, 4b) make the pair result a scale trend. First the small one: `google/gemma-3-270m` (text-only pretrained decoder, the origin of the 270m-270m; 18 layers, hidden 640, about 0.1B non-embedding parameters) under `configs/e1/gemma3-270m.yaml`, E1's recipe, 16k cap.
 
 - **Prediction.** The small pair repeats the shape of the large one: the 270m-270m above the 270M decoder on evidence F1 (by at least 0.03 on both variants) and on format validity, with answers close (within 0.02 macro-F1 either way) and both below the majority predictor on unseen questions. **Disconfirmed if** the 270M decoder matches or beats the 270m-270m on evidence F1 on both variants, which would mean the encoder-decoder's evidence advantage at 1b-1b was a one-off. If the decoder clears the majority predictor on unseen questions while the 270m-270m does not, the "size buys transfer" reading of the 1b-1b result is wrong and gets rewritten.
-- wandb: [tt-decoder/b8rzkm1s](https://wandb.ai/khalit7-/tt-decoder/runs/b8rzkm1s), 2026-09-16 23:01 → 23:52 (0.84 h; vLLM generation 6 min; scored 23:59).
+- wandb: [tt-decoder/b8rzkm1s](https://wandb.ai/khalit7-/tt-decoder/runs/b8rzkm1s) (deleted 2026-09-28; export in `checkpoints/_archive/e1-gemma3-270m-ddp-bug/wandb_export.json`; fixed re-run `ictv4tcb`), 2026-09-16 23:01 → 23:52 (0.84 h; vLLM generation 6 min; scored 23:59).
 - **Result.** Val loss 2.180 (0) → 1.195 (200) → 0.975 (1000) → 0.893 (2000) → 0.870 (2858), against the 270m-270m's 2.026 → 1.015 → 0.814 → 0.704 → 0.667: a gap of 0.20 at the end (0.10 in the 1B pair). Benchmark, clean / messy:
 
 | metric | Gemma 3 270M | 270m-270m |
@@ -116,7 +120,7 @@ The 270M decoder collapses under greedy decoding: 35.9% of its benchmark outputs
 
 ## The large pair: Gemma 3 4B and T5Gemma 2 4b-4b (added 2026-09-17 00:15; revised 00:30)
 
-> **Comparators affected by a bug.** The Gemma 3 4B run trained under FSDP and stands; every 1B, 270M and Qwen3 arm it is compared with here is a buggy DDP run (the 2026-09-28 audit), so these comparisons are void until the re-runs land.
+> **Comparators affected by a bug.** The Gemma 3 4B run trained under FSDP and stands; every 1B, 270M and Qwen3 arm it is compared with here is a buggy DDP run (the 2026-09-28 audit), so these comparisons were void until the re-runs landed; the sound comparison is in the dated re-read note under Verdict. *The DDP arms named here have since been re-run under the fixed loop (queue 30, complete 2026-10-05); the sound comparisons are in the dated re-read note under Verdict.*
 
 Next: test the result at a larger scale, full-parameter. The 4b-4b's 7.5B parameters do not fit E1's recipe (fp32 master weights) on two 32 GB cards: about 37 GB per GPU sharded. The first plan put both 4B arms on a bf16 + stochastic-rounding recipe (`optim.weights: bf16_sr`) and re-ran the 270m-270m under it as a check. That check, stopped at step 230, showed the recipes are **not** equivalent: val loss 0.922 at step 200 against 1.015 under fp32 masters (identical 2.026 at step 0), training loss lower from step 50 on. **Decision (00:25): every run stays on E1's recipe; the 4b-4b goes to rented hardware** (two 80 GB or four 48 GB cards) under the same recipe. Gemma 3 4B runs locally under E1's recipe, sharded as the Qwen-built E3 was.
 
@@ -141,17 +145,19 @@ Val split: macro-F1 0.820 / 0.777, evidence F1 0.737 / 0.687. The strongest trai
 - **Reading as the inference-matched control.** A 3.9B decoder beats the 2.1B encoder-decoder by 0.034 / 0.023 macro-F1 overall and 0.025 / 0.042 on unseen questions, with evidence F1 +0.016 / +0.014. The encoder-decoder gets within that margin while reading each prompt token through 0.7B parameters against the decoder's 3.9B, about a fifth of the compute per prompt token. Whether the 4b-4b (7.5B, 3.9B per prompt token) beats Gemma 3 4B is the pair question, still open.
 - Two evaluation launches failed on the export before this number: the multimodal class needs the image-processor files, and the streamed export had written tensors under module names where vLLM reads the on-disk convention. The export now goes through `save_pretrained` on a CPU copy plus a rename of the frozen image tower; the model itself was unaffected.
 
+> **Re-read 2026-10-05.** The fp32-master side of the recipe comparison below was the abandoned DDP-bug run of the 270m-270m (val loss 1.0150 at step 200). Under the fixed loop the same fp32-master run reads 0.9256 at step 200 against the bf16 stochastic-rounding check's 0.9222, a gap of 0.003, so the observation that the two recipes are not equivalent was an artefact of BUG-1, and the bf16_sr recipe is back on the table for the 4b-4b.
+
 **Recipe observation, parked.** The stopped check (`checkpoints/e4-t5gemma2-270m-270m-bf16sr-stopped/`, tt-encdec run) is the only measurement of the precision recipe's effect on this task: at lr 1e-5, bf16 weights with stochastic rounding trained faster than bf16 weights with fp32 masters over the first 230 steps of the 270m-270m. Not benchmarked, not explained; a plausible mechanism is that most single updates at this learning rate are below bf16's resolution and reach the weights only once accumulated under the master-copy recipe. Worth a full run at some point; not part of the pair design.
 
 ## Parameter-matched decoder controls: Qwen2.5-1.5B and Hunyuan-1.8B (added 2026-09-20, before the runs)
 
-> **Buggy runs, being re-run** (both controls and the 1b-1b they are read against; the Qwen3 arm is a buggy run that is not being re-run; the 2026-09-28 DDP bug).
+> **Abandoned DDP-bug runs** (both controls and the 1b-1b they are read against were re-run under the fixed loop and scored by 2026-10-02; the Qwen3 arm was not re-run; the sound comparison is in the re-read note under Verdict).
 
 The SmolLM3 run turned out to be an upper bracket rather than a match, so the next step was a parameter-matched comparison: decoder-only models the size of the 1b-1b, ready to fine-tune under E1's recipe. From a sixteen-candidate survey (notes §6) the two ready ones at the 1b-1b's size: **Qwen2.5-1.5B** (1.31B non-embedding against the 1b-1b's 1.40B; same vendor as E1's Qwen3-1.7B, previous generation) and **Hunyuan-1.8B-Pretrain** (1.54B; a third family, 256k native context). Both under E1's recipe unchanged (`configs/e1/qwen2.5-1.5b.yaml`, `configs/e1/hunyuan-1.8b.yaml`), DDP, 16k cap, vLLM evaluation.
 
 - **Prediction.** If the 1b-1b's margin over Qwen3-1.7B (+0.009 / +0.003 macro-F1 overall, +0.023 / −0.010 unseen, +0.016 / +0.020 evidence F1) reflects architecture rather than that one base, both matched decoders land at or below the 1b-1b on evidence F1 on both variants, and at or below it on clean unseen-question macro-F1. **Disconfirmed if** either matched decoder beats the 1b-1b on evidence F1 on both variants by more than 0.01, in which case the 1b-1b's edge over Qwen3-1.7B was specific to that base, and the architecture claim at matched size rests on the same-family Gemma pairs alone.
 - Order: Qwen2.5-1.5B, then Hunyuan-1.8B, each followed by evaluation; Hunyuan gets a three-step smoke first (its RoPE configuration warns under transformers 5).
-- wandb: Qwen2.5-1.5B [tt-decoder/76zoh4qj](https://wandb.ai/khalit7-/tt-decoder/runs/76zoh4qj), started 2026-09-20 11:16 (91,485 examples, 17 dropped above 16k); Hunyuan-1.8B tt-decoder, run id TBD (`checkpoints/e1-hunyuan-1.8b/wandb_id`).
+- wandb: Qwen2.5-1.5B [tt-decoder/76zoh4qj](https://wandb.ai/khalit7-/tt-decoder/runs/76zoh4qj) (deleted 2026-09-28; export in `checkpoints/_archive/e1-qwen2.5-1.5b-ddp-bug/wandb_export.json`; fixed re-run `trye2moq`), started 2026-09-20 11:16 (91,485 examples, 17 dropped above 16k); Hunyuan-1.8B tt-decoder/vo5d2jcy (abandoned DDP-bug run, deleted 2026-09-28; its fixed re-run is tt-decoder/k9rknb22).
 - **Qwen2.5-1.5B result** (2026-09-20 11:16 → 14:54, 3.6 h, DDP, ~19k tok/s over the pair, 24.7 GiB; vLLM generation 17 min; scored 15:10). Val loss 1.307 → 0.770 (200) → 0.638 (1000) → 0.573 (2000) → 0.553 (2858), against Qwen3-1.7B's 0.503 on a near-identical tokenizer. Benchmark, clean / messy:
 
 | metric | Qwen2.5-1.5B (1.31B non-emb) | T5Gemma 2 1b-1b (1.40B) | Qwen3-1.7B (1.41B) |
@@ -165,7 +171,7 @@ The SmolLM3 run turned out to be an upper bracket rather than a match, so the ne
 | messy 8–16k, macro-F1 / evidence F1 | 0.701 / 0.470 | 0.702 / 0.539 | 0.721 / 0.492 |
 
 Val split: macro-F1 0.736 / 0.714, evidence F1 0.624 / 0.589. The prediction holds for this control: below the 1b-1b on evidence F1 on both variants (−0.052 / −0.055) and on clean unseen-question macro-F1 (−0.103; its clean unseen 0.574 is below the majority predictor's 0.582). It is also below its own successor Qwen3-1.7B on every slice, by 0.03 overall and 0.08 / 0.06 on unseen questions, so the generation gap inside one vendor is as large as the architecture gap.
-- **Hunyuan-1.8B result** ([tt-decoder/vo5d2jcy](https://wandb.ai/khalit7-/tt-decoder/runs/vo5d2jcy); 15:10 → 16:42 to step ~895, aborted by a full disk at a checkpoint write, resumed from step-594 at 16:44 and finished 20:33, 3.83 h after the resume; vLLM in eager mode, since CUDA-graph capture fails on this model's on-demand RoPE cache; scored 21:06). Val loss 1.368 → 0.865 (200) → 0.702 (1000) → 0.616 (2000) → 0.583 (2858), own tokenizer. Benchmark, clean / messy:
+- **Hunyuan-1.8B result** ([tt-decoder/vo5d2jcy](https://wandb.ai/khalit7-/tt-decoder/runs/vo5d2jcy) (deleted 2026-09-28; export in `checkpoints/_archive/e1-hunyuan-1.8b-ddp-bug/wandb_export.json`; fixed re-run `k9rknb22`); 15:10 → 16:42 to step ~895, aborted by a full disk at a checkpoint write, resumed from step-594 at 16:44 and finished 20:33, 3.83 h after the resume; vLLM in eager mode, since CUDA-graph capture fails on this model's on-demand RoPE cache; scored 21:06). Val loss 1.368 → 0.865 (200) → 0.702 (1000) → 0.616 (2000) → 0.583 (2858), own tokenizer. Benchmark, clean / messy:
 
 | metric | Hunyuan-1.8B (1.54B non-emb) | Qwen2.5-1.5B (1.31B) | T5Gemma 2 1b-1b (1.40B) | Qwen3-1.7B (1.41B) |
 |---|---|---|---|---|
@@ -186,6 +192,6 @@ Val split: macro-F1 0.775 / 0.744, evidence F1 0.671 / 0.634. Hunyuan is the sec
 - **SmolLM3 3B cross-family control (2026-09-19).** [Pre-run hypothesis and setup](../2026-09-19-e1-smollm3-3b-base/README.md): an additional E1 baseline under the same precision recipe and 16k cap, testing practical competitiveness rather than architecture alone.
 - **Inference-matched decoder control.** The README asks for the encoder-decoder to be reported against both the parameter-matched and the inference-matched decoder. Gemma 3 4B pretrained under the E1 recipe brackets T5Gemma 2 1b-1b from above (4B against 2.1B); if the 1b-1b still wins or ties, the architecture claim strengthens. Full-parameter training of 4B needs the FSDP path generalised from `EncDec` to a plain decoder (or LoRA on both arms, which is a further confound).
 - **T5Gemma 2 4b-4b** is the scale point (7.5B trainable parameters, FSDP required, ~2× the time); worth it only after the 4B decoder control exists.
-- **E0** (the API baseline) is now the missing column: the strongest trained model needs to be placed against it.
+- The frontier API baseline that was to be the missing column was withdrawn on 2026-09-29: the benchmark's gold is its training labellers' own label, so no fair frontier comparison exists on it.
 - The 22 training calls above 16k were dropped for both arms; RoPE interpolation to 32k for T5Gemma 2 is untested here.
 - Generation through the library's `generate` took 2.6 h for the benchmark, against 8 min for the control under vLLM; vLLM has no T5Gemma 2 support, so a faster custom loop (encoder once, cached decode, as `--backend encdec`) is the fix if this model is evaluated often.

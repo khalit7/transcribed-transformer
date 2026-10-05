@@ -25,7 +25,7 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from src.train.data import build_examples
+from src.train.data import build_examples, encoder_pad_len
 from src.train.stitched import AffineMoments, explained_variance
 
 
@@ -93,7 +93,7 @@ def main() -> None:
             batch, longest = [], 0
             while i < len(ex) and (not batch or max(longest, ex[i].n_prompt) * (len(batch) + 1) <= args.batch_tokens):
                 batch.append(ex[i]); longest = max(longest, ex[i].n_prompt); i += 1
-            ids = torch.full((len(batch), longest), pad, dtype=torch.long); mask = torch.zeros_like(ids)
+            ids = torch.full((len(batch), encoder_pad_len(longest)), pad, dtype=torch.long); mask = torch.zeros_like(ids)  # BUG-2: never an unpadded row
             for r, e in enumerate(batch):
                 p = torch.from_numpy(e.input_ids[:e.n_prompt].astype("int64")); ids[r, :len(p)] = p; mask[r, :len(p)] = 1
             ids, mask = ids.to(device), mask.to(device)

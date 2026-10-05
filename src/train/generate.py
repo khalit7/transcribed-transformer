@@ -3,8 +3,7 @@
     .venv-vllm/bin/python -m src.train.generate <model_dir> <split.jsonl> <out.jsonl> [--variants clean,messy]
         [--max-tokens 512] [--tp 1] [--limit N] [--backend vllm|hf]
 
-The prompt is src/train/data.task_prompt, the same text the model was trained on and the API
-baseline is given. Greedy decoding. The output records carry the pair id, the variant rendered and
+The prompt is src/train/data.task_prompt, the same text the model was trained on. Greedy decoding. The output records carry the pair id, the variant rendered and
 the raw text, and src/train/evaluate.py scores them; nothing here parses or repairs the output.
 vLLM runs in its own environment (.venv-vllm) because it pins its own torch; --backend hf is the
 slow fallback inside the training environment, and --backend prefixlm is the E2 path (bidirectional
@@ -22,6 +21,20 @@ import time
 from pathlib import Path
 
 from src.train.data import SEP, record_prompt
+
+
+def encoder_pad_len(n: int) -> int:
+    """The padded length for a batch of encoder inputs whose longest row has n tokens: the next multiple of 32 strictly
+    above n, so every row is padded and a padding mask is always present. Measured 2026-09-28 on the base T5Gemma 2
+    270m-270m (torch 2.8, transformers 5.17, RTX 5090): under SDPA in eval mode, an unpadded input whose length is 1 mod 32
+    decodes differently from the same prompt under eager attention on 16 of 16 rows, and the longest (unpadded) row of a
+    batch is affected too; padded this way, 3 of 16 and 2 of 16 differ, the same as eager's own batch-to-batch jitter. The
+    training forward (grad enabled) does not show the effect. The archived native-run outputs had 10 to 13% unparseable
+    outputs on such rows against 1 to 2% elsewhere. The raw kernel is not at fault for plain shapes (bf16 against an fp32
+    reference at 0.002 for every length), and forcing the MATH backend on the model makes the effect vanish (4 of 16 differ,
+    eager's own jitter) while disabling cuDNN does not: a fused SDPA kernel goes wrong on this model's eval-mode call shapes
+    (head dim 256, grouped queries, sliding-window masks) at these lengths. Padding keeps the fast path and avoids them."""
+    return ((n + 32) // 32) * 32
 
 
 def load_pairs(split: Path, variants: list[str], limit: int | None) -> list[tuple[str, str, str]]:
@@ -112,7 +125,7 @@ def main() -> None:
         with args.out.open("a") as f:
             for i in range(0, len(pairs), 4):
                 chunk = pairs[i:i + 4]
-                enc = tok([p for _, _, p in chunk], return_tensors="pt", padding=True, add_special_tokens=False).to("cuda")
+                enc = tok([p for _, _, p in chunk], return_tensors="pt", padding=True).to("cuda")  # as training: default special tokens (Gemma's <bos>)
                 with torch.no_grad():
                     gen = model.generate(  # type: ignore[call-arg,operator]
                         **enc, max_new_tokens=args.max_tokens, do_sample=False)
@@ -148,7 +161,7 @@ def generate_prefix_lm(model_dir: str, pairs: list[tuple[str, str, str]], out, m
         model_dir, dtype=torch.bfloat16, attn_implementation="flex_attention").cuda().eval()
     eos = tok.eos_token_id
     pad = tok.pad_token_id if tok.pad_token_id is not None else eos
-    enc_all = tok([p for _, _, p in pairs], add_special_tokens=False)["input_ids"]
+    enc_all = tok([p for _, _, p in pairs])["input_ids"]  # as training: default special tokens
     order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
     t0 = time.time()
     bi = 0
@@ -162,7 +175,7 @@ def generate_prefix_lm(model_dir: str, pairs: list[tuple[str, str, str]], out, m
         bi += bs
         n_batches += 1
         seqs = [enc_all[i] for i in idx]
-        n = max(len(s) for s in seqs)
+        n = encoder_pad_len(max(len(s) for s in seqs))
         ids = torch.full((len(seqs), n), pad, dtype=torch.long)
         attn = torch.zeros((len(seqs), n), dtype=torch.long)
         for r, s in enumerate(seqs):  # left padding
@@ -200,13 +213,14 @@ def generate_prefix_lm(model_dir: str, pairs: list[tuple[str, str, str]], out, m
         gen_t = torch.stack(gen, 1).tolist()
         for r, i in enumerate(idx):
             toks = []
+            hit_eos = eos in gen_t[r]  # a capped output has no EOS and is counted as it stands
             for t in gen_t[r]:
                 if t == eos:
                     break
                 toks.append(t)
             id_, v, _ = pairs[i]
             out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
-                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + int(hit_eos)}) + "\n")
         out.flush()
         if n_batches % 50 == 1:
             print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
@@ -226,7 +240,7 @@ def generate_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, max_
     model = EncDec.load(model_dir, gradient_checkpointing=False).cuda().eval()
     eos = tok.eos_token_id
     pad = tok.pad_token_id if tok.pad_token_id is not None else eos
-    enc_all = tok([p for _, _, p in pairs], add_special_tokens=False)["input_ids"]
+    enc_all = tok([p for _, _, p in pairs])["input_ids"]  # as training: default special tokens
     order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
     t0 = time.time()
     bi = 0
@@ -238,7 +252,7 @@ def generate_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, max_
         bi += bs
         n_batches += 1
         seqs = [enc_all[i] for i in idx]
-        n = max(len(s) for s in seqs)
+        n = encoder_pad_len(max(len(s) for s in seqs))
         ids = torch.full((len(seqs), n), pad, dtype=torch.long)
         mask = torch.zeros((len(seqs), n), dtype=torch.long)
         for r, s in enumerate(seqs):
@@ -263,13 +277,14 @@ def generate_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, max_
         gen_t = torch.stack(gen, 1).tolist()
         for r, i in enumerate(idx):
             toks = []
+            hit_eos = eos in gen_t[r]  # a capped output has no EOS and is counted as it stands
             for t in gen_t[r]:
                 if t == eos:
                     break
                 toks.append(t)
             id_, v, _ = pairs[i]
             out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
-                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + int(hit_eos)}) + "\n")
         out.flush()
         if n_batches % 50 == 1:
             print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
@@ -299,7 +314,7 @@ def generate_hf_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, m
         bi += bs
         n_batches += 1
         seqs = [enc_all[i] for i in idx]
-        n = max(len(s) for s in seqs)
+        n = encoder_pad_len(max(len(s) for s in seqs))
         ids = torch.full((len(seqs), n), pad, dtype=torch.long)
         mask = torch.zeros((len(seqs), n), dtype=torch.long)
         for r, s in enumerate(seqs):
@@ -310,13 +325,14 @@ def generate_hf_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, m
                                  do_sample=False, num_beams=1, decoder_start_token_id=start, eos_token_id=eos, pad_token_id=pad)
         for r, i in enumerate(idx):
             toks = []
+            hit_eos = eos in gen[r, 1:].tolist()
             for t in gen[r, 1:].tolist():  # the row opens with the decoder start token
                 if t == eos:
                     break
                 toks.append(t)
             id_, v, _ = pairs[i]
             out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
-                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + int(hit_eos)}) + "\n")
         out.flush()
         if n_batches % 50 == 1:
             print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
@@ -352,9 +368,9 @@ def generate_hf_encdec_hybrid(model_dir: str, pairs: list[tuple[str, str, str]],
         bi += bs
         n_batches += 1
         seqs = [enc_all[i] for i in idx]
-        n = max(len(s) for s in seqs)
+        n = encoder_pad_len(max(len(s) for s in seqs))
         enc_ids = torch.full((len(seqs), n), pad, dtype=torch.long); enc_mask = torch.zeros((len(seqs), n), dtype=torch.long)
-        m = n + 1  # decoder prefix: start token + prompt, left-padded
+        m = encoder_pad_len(n)  # decoder prefix: start token + prompt, left-padded; a multiple of 32 for the same reason as n
         dec_ids = torch.full((len(seqs), m), pad, dtype=torch.long); dec_mask = torch.zeros((len(seqs), m), dtype=torch.long)
         pos = torch.zeros((len(seqs), m), dtype=torch.long)
         for r, s in enumerate(seqs):
@@ -386,13 +402,14 @@ def generate_hf_encdec_hybrid(model_dir: str, pairs: list[tuple[str, str, str]],
         gen_t = torch.stack(gen, 1).tolist()
         for r, i in enumerate(idx):
             toks = []
+            hit_eos = eos in gen_t[r]  # a capped output has no EOS and is counted as it stands
             for t in gen_t[r]:
                 if t == eos:
                     break
                 toks.append(t)
             id_, v, _ = pairs[i]
             out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
-                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + int(hit_eos)}) + "\n")
         out.flush()
         if n_batches % 50 == 1:
             print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
@@ -425,7 +442,7 @@ def generate_hybrid(model_dir: str, pairs: list[tuple[str, str, str]], out, max_
         bi += bs
         n_batches += 1
         seqs = [enc_all[i] for i in idx]
-        n = max(len(s) for s in seqs)
+        n = encoder_pad_len(max(len(s) for s in seqs))
         enc_ids = torch.full((len(seqs), n), pad, dtype=torch.long); enc_mask = torch.zeros((len(seqs), n), dtype=torch.long)
         dec_ids = torch.full((len(seqs), n), pad, dtype=torch.long); dec_mask = torch.zeros((len(seqs), n), dtype=torch.long)
         pos = torch.zeros((len(seqs), n), dtype=torch.long)
@@ -462,13 +479,14 @@ def generate_hybrid(model_dir: str, pairs: list[tuple[str, str, str]], out, max_
         gen_t = torch.stack(gen, 1).tolist()
         for r, i in enumerate(idx):
             toks = []
+            hit_eos = eos in gen_t[r]  # a capped output has no EOS and is counted as it stands
             for t in gen_t[r]:
                 if t == eos:
                     break
                 toks.append(t)
             id_, v, _ = pairs[i]
             out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
-                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + int(hit_eos)}) + "\n")
         out.flush()
         if n_batches % 50 == 1:
             print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
@@ -503,7 +521,7 @@ def generate_soft(model_dir: str, pairs: list[tuple[str, str, str]], out, max_to
         bi += bs
         n_batches += 1
         seqs = [enc_all[i] for i in idx]
-        n = max(len(s) for s in seqs)
+        n = encoder_pad_len(max(len(s) for s in seqs))
         enc_ids = torch.full((len(seqs), n), pad, dtype=torch.long); enc_mask = torch.zeros((len(seqs), n), dtype=torch.long)
         dec_ids = torch.full((len(seqs), n), pad, dtype=torch.long); dec_mask = torch.zeros((len(seqs), n), dtype=torch.long)
         pos = torch.zeros((len(seqs), n), dtype=torch.long)
@@ -537,13 +555,14 @@ def generate_soft(model_dir: str, pairs: list[tuple[str, str, str]], out, max_to
         gen_t = torch.stack(gen, 1).tolist()
         for r, i in enumerate(idx):
             toks = []
+            hit_eos = eos in gen_t[r]  # a capped output has no EOS and is counted as it stands
             for t in gen_t[r]:
                 if t == eos:
                     break
                 toks.append(t)
             id_, v, _ = pairs[i]
             out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
-                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + int(hit_eos)}) + "\n")
         out.flush()
         if n_batches % 50 == 1:
             print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
@@ -575,7 +594,7 @@ def generate_stitched(model_dir: str, pairs: list[tuple[str, str, str]], out, ma
         bi += bs
         n_batches += 1
         seqs = [enc_all[i] for i in idx]
-        n = max(len(s) for s in seqs)
+        n = encoder_pad_len(max(len(s) for s in seqs))
         enc_ids = torch.full((len(seqs), n), pad, dtype=torch.long); enc_mask = torch.zeros((len(seqs), n), dtype=torch.long)
         for r, s in enumerate(seqs):
             enc_ids[r, :len(s)] = torch.tensor(s); enc_mask[r, :len(s)] = 1
@@ -603,13 +622,14 @@ def generate_stitched(model_dir: str, pairs: list[tuple[str, str, str]], out, ma
         gen_t = torch.stack(gen, 1).tolist()
         for r, i in enumerate(idx):
             toks = []
+            hit_eos = eos in gen_t[r]  # a capped output has no EOS and is counted as it stands
             for t in gen_t[r]:
                 if t == eos:
                     break
                 toks.append(t)
             id_, v, _ = pairs[i]
             out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
-                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + 1}) + "\n")
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + int(hit_eos)}) + "\n")
         out.flush()
         if n_batches % 50 == 1:
             print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)

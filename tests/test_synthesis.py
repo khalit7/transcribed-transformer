@@ -5,6 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.synthesis.benchmark import two_golds
 from src.synthesis.label import _parse, prompt, schema_for
 from src.synthesis.llm import LLMError, split_model
 from src.synthesis.question_bank import QUESTIONS
@@ -144,7 +145,7 @@ def test_claude_other_errors_still_fail_fast(monkeypatch):
         llm.ask_json("p", "claude:sonnet", retries=1)
 
 
-# --- split and benchmark reconciliation -------------------------------------------------------
+# --- split and the benchmark's two golds -------------------------------------------------------
 
 def test_lineage_maps_taskmaster_variants_to_their_base_question():
     from src.synthesis.split import lineage
@@ -179,20 +180,28 @@ def test_assign_drops_held_out_questions_off_benchmark_only():
     assert assign(rec("c-x", "gen-1"), splits) == "drop"
 
 
-def test_reconcile_agreement_unions_evidence_and_disagreement_needs_the_adjudicator():
-    from src.synthesis.benchmark import reconcile
-    ledger = {"label": {"answer": "pass", "evidence": [1, 2], "summary": "s"}, "generation_info": {"name": "ollama:qwen3.8"}}
-    agree = {"label": {"answer": "pass", "evidence": [2, 3]}, "generation_info": {"name": "ollama:gemma4:12b"}}
-    differ = {"label": {"answer": "fail", "evidence": [3]}, "generation_info": {"name": "ollama:gemma4:12b"}}
-    opus = {"label": {"answer": "fail", "evidence": [3], "summary": "o"}, "generation_info": {"name": "claude:opus"}}
-    gold, prov = reconcile(ledger, agree, None)
-    assert (prov.method, gold.answer, gold.evidence) == ("agreement", "pass", [1, 2, 3])
-    gold, prov = reconcile(ledger, differ, None)
-    assert prov.method == "pending" and gold.answer == "pass"
-    gold, prov = reconcile(ledger, differ, opus)
-    assert (prov.method, gold.answer, prov.adjudicator) == ("adjudicated", "fail", "claude:opus")
+def test_two_golds_never_alters_the_teacher_label_and_names_the_opus_labeller():
+    ledger = {"id": "x", "label": {"answer": "pass", "evidence": [1, 2], "summary": "s", "tags": []}, "generation_info": {"name": "ollama:qwen3.8"}}
+    agree = {"label": {"answer": "pass", "evidence": [2, 3], "summary": "s", "tags": []}, "generation_info": {"name": "ollama:gemma4:12b"}}
+    differ = {"label": {"answer": "fail", "evidence": [3], "summary": "s", "tags": []}, "generation_info": {"name": "ollama:gemma4:12b"}}
+    opus_rec = {"label": {"answer": "fail", "evidence": [4], "summary": "s", "tags": []}, "generation_info": {"name": "claude:opus"}}
+    teacher, opus, prov = two_golds(ledger, agree, None)
+    assert teacher.evidence == [1, 2] and opus is None and prov.method == "teacher"  # no union: the teacher's key stays its own
+    teacher, opus, prov = two_golds(ledger, differ, opus_rec)
+    assert teacher.answer == "pass" and opus.answer == "fail" and opus.evidence == [4] and prov.opus_labeller == "claude:opus"
     assert prov.labels == {"ollama:qwen3.8": "pass", "ollama:gemma4:12b": "fail", "claude:opus": "fail"}
-    gold, prov = reconcile(ledger, None, None)
-    assert prov.method == "single"
-    gold, prov = reconcile(ledger, None, opus)  # spot-checked family label with no second opinion
-    assert prov.method == "adjudicated" and gold.answer == "fail"
+
+
+def test_assign_routes_post_freeze_podcast_episodes_by_their_podcast():
+    """A SPoRC episode labelled after the freeze follows its podcast's side: a sibling of a benchmark or excluded episode is
+    dropped, a sibling of a val episode goes to val, anything else to train (2026-10-05 audit finding)."""
+    from src.synthesis.split import assign
+    splits = {"calls": {"sporc-a": "benchmark"}, "held_out_questions": [],
+              "groups": {"pod:Bench Show": "benchmark", "pod:Val Show": "val", "pod:Side Show": "excluded"}}
+    def rec(cid, pod):
+        return {"id": f"{cid}::gen-1", "dataset": "sporc", "question": {"id": "gen-1"}, "meta": {"pod_title": pod}}
+    assert assign(rec("sporc-new1", "Bench Show"), splits) == "drop"
+    assert assign(rec("sporc-new2", "Side Show"), splits) == "drop"
+    assert assign(rec("sporc-new3", "Val Show"), splits) == "val"
+    assert assign(rec("sporc-new4", "Fresh Show"), splits) == "train"
+    assert assign({"id": "tm-new::gen-1", "dataset": "taskmaster", "question": {"id": "gen-1"}, "meta": {"subset": "x"}}, splits) == "train"

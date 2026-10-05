@@ -89,6 +89,60 @@ def _case(id: str, track: str, source_id: str, variants: list[Variant], role_sou
 
 # ---------------------------------------------------------------- AppTek
 
+def assign_words(words: list[dict], spans: list[tuple[float, float]]) -> list[list[str]]:
+    """Time-align recogniser words to the verbatim turns: a word goes to the turn whose span holds its midpoint; a word in
+    the gap between two turns goes to the nearer one. Until 2026-09-29 the nearer-neighbour branch could never fire (its
+    condition was unreachable once the cursor had advanced), so every gap word attached to the preceding turn: 3.9% of
+    AppTek words fall in gaps and 1.4% ended up on the other speaker's line."""
+    buckets: list[list[str]] = [[] for _ in spans]
+    j = 0
+    for w in words:
+        mid = (w["start"] + w["end"]) / 2
+        while j < len(spans) - 1 and mid > spans[j][1] and mid >= spans[j + 1][0]:
+            j += 1
+        k = j
+        if mid > spans[j][1] and j < len(spans) - 1 and (spans[j + 1][0] - mid) < (mid - spans[j][1]):
+            k = j + 1  # in the gap after turn j, nearer to the next turn
+        elif mid < spans[j][0] and j > 0 and (spans[j][0] - mid) > (mid - spans[j - 1][1]):
+            k = j - 1  # in the gap before turn j, nearer to the previous turn
+        buckets[k].append(w["word"].strip())
+    return buckets
+
+
+def aci_turns(dialogue: str) -> tuple[list[tuple[str, str]], int]:
+    """ACI-Bench dialogue text to (turns, lines dropped). A line without a bracketed speaker is a continuation of the turn
+    before it and is appended to it (until 2026-09-29 such lines were dropped: 13 untagged lines in the challenge data, 12
+    continuations and one leading line); one with no turn before it is dropped and counted. The whole challenge text is
+    lower-cased and tokenised, so no text heuristic can tell the encounters that are recogniser output from the verbatim
+    ones; the corpus's own metadata does (`aci_subsets`)."""
+    turns: list[tuple[str, str]] = []
+    dropped = 0
+    for ln in dialogue.split("\n"):
+        s = ln.strip()
+        if not s:
+            continue
+        m = re.match(r"\[(doctor|patient|\w+)\]\s*(.*)", s, re.IGNORECASE)
+        if m and m.group(2).strip():
+            turns.append((m.group(1).lower(), m.group(2).strip()))
+        elif turns and not m:
+            turns[-1] = (turns[-1][0], turns[-1][1] + " " + s)
+        elif not m:
+            dropped += 1
+    return turns, dropped
+
+
+def aci_subsets(root: Path) -> dict[str, str]:
+    """encounter id -> the corpus's `dataset` column of the matching `*_metadata.csv` (aci: recorded and transcribed doctor
+    visits; virtassist and virtscribe: encounters produced through a virtual assistant or scribe pipeline), so a reader of
+    per-dataset numbers can separate the subsets; kept in each case's `meta.subset`."""
+    out: dict[str, str] = {}
+    for meta in sorted(root.glob("*_metadata.csv")):
+        with meta.open() as f:
+            for r in csv.DictReader(f):
+                out[r["encounter_id"]] = r["dataset"]
+    return out
+
+
 def apptek_cases() -> Iterator[Case]:
     hyp_root = INTERIM / "apptek_callcenter_selfasr" / "diarization-degraded"
     for meta in sorted((RAW / "apptek_callcenter" / "diarization").glob("*/metadata.jsonl")):
@@ -103,18 +157,7 @@ def apptek_cases() -> Iterator[Case]:
             if len(segs) < 10:
                 continue
             words = json.loads(hyp_file.read_text())["words"]
-            spans = [(s["start"], s["end"]) for s in segs]
-            buckets: list[list[str]] = [[] for _ in segs]
-            j = 0
-            for w in words:
-                mid = (w["start"] + w["end"]) / 2
-                while j < len(spans) - 1 and mid > spans[j][1] and mid >= spans[j + 1][0]:
-                    j += 1
-                # words in gaps go to the nearer neighbour's turn
-                if mid < spans[j][0] and j > 0 and (spans[j][0] - mid) > (mid - spans[j - 1][1]):
-                    buckets[j - 1].append(w["word"].strip())
-                else:
-                    buckets[j].append(w["word"].strip())
+            buckets = assign_words(words, [(s["start"], s["end"]) for s in segs])
             if any(not s.get("role") for s in segs):
                 raise NoSpeakerRoles(f"apptek {stem}: a segment has no role label")
             clean = _render([(s["role"], s["text"].strip()) for s in segs])
@@ -171,19 +214,18 @@ def taskmaster_cases() -> Iterator[Case]:
 def aci_bench_cases() -> Iterator[Case]:
     csv.field_size_limit(10**8)
     root = RAW / "aci_bench" / "data" / "aci-bench" / "challenge_data"
+    subsets = aci_subsets(root)
     for path in sorted(root.glob("*.csv")):
         if path.name.endswith("_metadata.csv"):
             continue
         with path.open() as f:
             for r in csv.DictReader(f):
-                turns = []
-                for ln in r["dialogue"].split("\n"):
-                    m = re.match(r"\[(doctor|patient|\w+)\]\s*(.*)", ln.strip(), re.IGNORECASE)
-                    if m and m.group(2).strip():
-                        turns.append((m.group(1).lower(), m.group(2).strip()))
+                turns, dropped = aci_turns(r["dialogue"])
                 if len(turns) < 8:
                     continue
                 doc_id = f"{path.stem}-{r.get('encounter_id') or r.get('ID')}"
+                if dropped:
+                    print(f"  aci_bench {doc_id}: {dropped} untagged line(s) before the first turn dropped", flush=True)
                 clean = _render(turns)
                 messy = [f"{ln.split(': ', 1)[0]}: {noise_line(ln.split(': ', 1)[1], seed=stable_seed(doc_id, i))}"
                          for i, ln in enumerate(clean)]
@@ -191,7 +233,8 @@ def aci_bench_cases() -> Iterator[Case]:
                     f"aci-{doc_id}", "track-p", f"aci_bench/challenge_data/{doc_id}",
                     [Variant(kind="clean", origin="ACI-Bench challenge_data dialogue (cleaned)", lines=clean),
                      Variant(kind="messy", origin="channel v2.2 noised + crude surface restoration (synthetic)", lines=messy)],
-                    "ACI-Bench bracketed speaker labels ([doctor] / [patient])", {"split_file": path.stem},
+                    "ACI-Bench bracketed speaker labels ([doctor] / [patient])",
+                    {"split_file": path.stem, "subset": subsets.get(r.get("encounter_id") or r.get("ID"), "")},
                 )
 
 

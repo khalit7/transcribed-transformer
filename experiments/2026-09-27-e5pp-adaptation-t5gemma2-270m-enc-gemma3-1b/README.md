@@ -4,10 +4,12 @@ Written before the runs, 2026-09-27 22:40, while the 1b-encoder E5++ fine-tune w
 [the 1b-encoder adaptation pair](../2026-09-26-e5pp-adaptation-t5gemma2-1b-enc-gemma3-1b/README.md) and follow-up to
 [the unadapted 270m arm](../2026-09-25-e5-soft-tokens-t5gemma2-270m-enc-gemma3-1b/README.md).
 
+> **Gold and cell as scored here (note added 2026-09-29).** The benchmark numbers in this record were scored against the pre-D61 mixed gold (the training labeller's answer where a second local labeller agreed, Opus's where they disagreed or where Sonnet said `fail`, with union evidence keys) and their unseen-question figures include the twenty held-out questions that have twins in training. From 2026-09-29 every result is reported under two golds, gold = teacher (the training labeller's own label, the headline) and gold = opus (Opus's label on the 4,012 pairs it labelled), with the no-twin held-out slice as the zero-shot number; the re-run record (`experiments/2026-09-28-rerun-under-the-fixed-loop/`) and the README carry those. The predictions and readings below are kept as written.
+
 ## Hypothesis
 
 Unadapted, the 270m encoder in front of the Gemma 3 1B decoder scored below its control (0.636 / 0.461 clean
-macro-F1 / unseen-question macro-F1 against 0.651 / 0.496), and the 1b encoder brought the arm level with it. I read
+macro-F1 / unseen-question macro-F1 against 0.651 / 0.496 [as pre-registered, under the pre-D61 gold; the fixed re-run under gold = teacher is 0.698 / 0.488 clean macro-F1 / no-twin]), and the 1b encoder brought the arm level with it. I read
 the 270m deficit as partly an interface problem: the decoder had to learn to read a narrower encoder (640 wide, stitch
 explained variance 0.620) from the task loss alone. If the continuation-adaptation stage teaches that interface, the
 270m arm should recover more from it than the 1b arm did, because it had more to recover.
@@ -35,11 +37,11 @@ identical, so E1++ (`e1pp-gemma3-1b-pt`, already scored: 0.650 / 0.470) is the m
   adapted checkpoint under E1's recipe, 16k micro-batches as the unadapted 270m fine-tune ran.
 - Generation with `--backend soft` on both cards; scored by `src/train/evaluate.py`; benchmark metrics logged to the
   fine-tune's wandb run.
-- wandb: adaptation stage [tt-pretrain/d1ax1lf6](https://wandb.ai/khalit7-/tt-pretrain/runs/d1ax1lf6); E5++ [tt-encdec/18f3lqfg](https://wandb.ai/khalit7-/tt-encdec/runs/18f3lqfg), benchmark keys logged to the same run.
+- wandb: adaptation stage [tt-pretrain/d1ax1lf6](https://wandb.ai/khalit7-/tt-pretrain/runs/d1ax1lf6) (deleted 2026-09-28; export in `checkpoints/_archive/adapt-continuation-corpora-e5-t5gemma2-270m-enc-gemma3-1b-ddp-bug/wandb_export.json`; fixed re-run `wizcg0a5`); E5++ [tt-encdec/18f3lqfg](https://wandb.ai/khalit7-/tt-encdec/runs/18f3lqfg) (deleted 2026-09-28; export in `checkpoints/_archive/e5pp-t5gemma2-270m-enc-gemma3-1b-ddp-bug/wandb_export.json`; fixed re-run `4rsknusl`), benchmark keys logged to the same run.
 
 ## Result
 
-> **The numbers below come from a run with a bug and are being replaced.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients (each rank trained its own replica on its half of every step; rank 0's was saved), so these are for a model trained on half the data at an effective batch of 16. The run is in the re-run queue under the fixed loop ([the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)); its replacement's numbers replace these when scored.
+> **Superseded: the numbers below are the abandoned DDP-bug run's, kept as history; the re-run under the fixed loop is scored and reported in the re-run record (`../2026-09-28-rerun-under-the-fixed-loop/`) and in the dated re-read note under Verdict.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients (each rank trained its own replica on its half of every step; rank 0's was saved), so these are for a model trained on half the data at an effective batch of 16. The replacement ran in queue 30 and is scored../2026-09-28-rerun-under-the-fixed-loop/README. The replacement's numbers are in the re-run record and in the re-read note under Verdict; these stay as history.
 
 - **Adaptation stage** (2026-09-28 01:46 → 08:55, 7.16 h at about 24k tokens/s, 19.3 GiB, 1.27B trainable): continuation validation 2.513 (step 0), 1.806 (500), 1.784 (1000), 1.769 (1500), 1.758 (2000), 1.749 (2500), 1.743 (3000), 1.739 (3500), **1.736 (4107)**, against the decoder alone at 1.952 → 1.720 and the 1b soft-token model at 2.271 → 1.734. The 270m prefix starts 0.56 behind the token prefix (the 1b started 0.32 behind) and ends 0.016 behind, where the 1b ended 0.014 behind: on plain continuation the two encoders' soft tokens read almost equally well.
 - **Fine-tune** (09:00 → 13:23, 4.36 h at about 16.7k tokens/s, 19.5 GiB): task validation against E1++ at the same steps 1.977 / 1.969 (step 0; the unadapted 270m arm started at 4.44), 0.930 / 0.924 (200), 0.856 / 0.837 (400), 0.750 / 0.741 (1000), 0.706 / 0.706 (1400), 0.684 / 0.686 (1600), 0.657 / 0.661 (2000), 0.638 / 0.644 (2400), **0.627 / 0.633 (2858)**. The stage removed the interface cost at step 0 entirely; the arm crosses the control at step 1600 and ends 0.006 below it. Generation through the soft backend 13:23 → 15:44 on both cards; scored 15:44.
@@ -58,9 +60,11 @@ identical, so E1++ (`e1pp-gemma3-1b-pt`, already scored: 0.650 / 0.470) is the m
 
 ## Verdict
 
+> **Re-read under gold = teacher (2026-09-29).** Level with E1++ overall (−0.002 / −0.004 macro-F1), 0.010 to 0.017 behind on unseen questions (no-twin −0.015 / −0.010), ahead on evidence by +0.048 / +0.049 and format by 0.02 to 0.03. The stage halved the small encoder's zero-shot deficit (−0.031 to −0.015 / −0.010) and removed it on overall answers; "repaired exactly" overstates it. Both abandoned DDP-bug runs, matched. **Both sides re-run under the fixed loop (2026-10-01):** this arm 0.721 / 0.500, evidence F1 0.668 (Opus 0.440 / 0.283) against E1++ 0.707 / 0.507, evidence 0.628 (Opus 0.423 / 0.282): +0.015 / +0.018 macro-F1, +0.040 / +0.041 evidence F1, +0.046 / +0.049 precision, −0.007 / −0.002 on no-twin under the teacher gold, +0.017 / +0.023 under Opus's. Slightly ahead on answers, ahead on evidence, level on zero-shot; the encoder axis at one decoder reads 270m 0.721 / 0.500, 1b 0.742 / 0.505.
+
 The adaptation stage repaired the 270m encoder's deficit exactly, and no further: the arm is level with E1++ on answers, seen and unseen, and ahead of it only where every adapted soft-token arm has been ahead, on evidence and output quality. The first prediction (above the unadapted arm by more than 0.02 on clean macro-F1) missed by 0.008; the second reading holds (within 0.02 of E1++ after adaptation, so the unadapted deficit was the interface, not capacity); the disconfirmation did not fire on evidence, where the gain is 0.04. Read with the 1b arm, the encoder axis under the recipe now has two points at one decoder: 270m repairs and adds evidence, 1b adds answers, unseen questions and more evidence. The 4b arm, queued, is the third. One seed; the answer-level differences here are within a seed's worth and are not claimed.
 
 ## Follow-ups
 
-- The 4b encoder into the same decoder under the same stage (queue 28), the third point of the axis.
+- The 4b encoder into the same decoder under the same stage (queue 28, aborted 2026-09-28: full-parameter training does not fit the local cards; moved to rented hardware), the third point of the axis. The 4b encoder into the 270M decoder ran instead (the encoder-axis record, 2026-10-05).
 - A seed replicate of E1++ and one E5++ arm before any answer-level gap under 0.02 in this family is read as a result.

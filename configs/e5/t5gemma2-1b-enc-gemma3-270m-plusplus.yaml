@@ -1,0 +1,30 @@
+# E5++ with the 1b encoder into Gemma 3 270M: the E5 fine-tune started from the corpora-scale continuation-adapted checkpoint
+# (configs/adapt/continuation-corpora-e5-t5gemma2-1b-enc-gemma3-270m.yaml), under E1's recipe. Read against E1++ on the 270M decoder
+# (does the encoder help this decoder under our recipe) and against the mix-and-match 1b encoder + 270m native decoder (0.724 / 0.646)
+# (how much of the native interface's advantage the recipe recovers). ~1.27B, DDP.
+experiment: e5
+name: e5pp-t5gemma2-1b-enc-gemma3-270m
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: checkpoints/adapt-continuation-corpora-e5-t5gemma2-1b-enc-gemma3-270m/final   # a SoftStitched.save dir: encoder, stitch and decoder
+  arch: soft
+  decoder_sees_prompt: true
+  attn: flash_attention_2
+  gradient_checkpointing: true
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 200
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-encdec
+tags: [soft-tokens, adapted, google/gemma-3-270m, enc-google/t5gemma-2-1b-1b, full-params, corpora, control-e1pp-gemma3-270m]

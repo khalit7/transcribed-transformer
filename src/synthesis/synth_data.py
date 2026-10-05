@@ -2,7 +2,7 @@
 
 Terminology (see CLAUDE.md): answering a question about a transcript is **LLM labelling** and the
 model doing it is the labeller; assessing how good a label is, is **LLM-as-a-judge** and lives in
-a separate step (grade_labels.py, planned). Nothing in this module judges.
+a separate step (grade_labels.py). Nothing in this module judges.
 
     uv run python -m src.synthesis.synth_data <model> <num_transcripts> <families> [options]
 

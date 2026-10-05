@@ -2,6 +2,8 @@
 
 The first test of hypothesis 1 (bidirectional attention over the transcript should beat causal). Identical to [E1](../2026-09-10-e1-qwen3-1.7b-base/README.md) in checkpoint, data, rendering, loss, optimiser, schedule and steps; the one change is the attention mask: every prompt token attends to every prompt token, answer tokens attend causally. Written before launch on 2026-09-10.
 
+> **Gold and cell as scored here (note added 2026-09-29).** The benchmark numbers in this record were scored against the pre-D61 mixed gold (the training labeller's answer where a second local labeller agreed, Opus's where they disagreed or where Sonnet said `fail`, with union evidence keys) and their unseen-question figures include the twenty held-out questions that have twins in training. From 2026-09-29 every result is reported under two golds, gold = teacher (the training labeller's own label, the headline) and gold = opus (Opus's label on the 4,012 pairs it labelled), with the no-twin held-out slice as the zero-shot number; the re-run record (`experiments/2026-09-28-rerun-under-the-fixed-loop/`) and the README carry those. The predictions and readings below are kept as written.
+
 ## Hypothesis
 
 Letting the transcript tokens attend to each other in both directions gives the answer positions a representation built from the whole conversation rather than a left-to-right prefix, and that improves the judgements and the evidence selection. RedLLM (arXiv 2510.26622) measured +2.3 to +6.4 points from exactly this flip at fine-tuning time on 1B to 8B causal-pretrained decoders; Bitune's naive-bidirectional ablation +1.5 to +2.2 under LoRA; PaliGemma and Gemma 3 ship the mask. Against it: Wang et al. 2022 found no gain from the flip without an adaptation stage, and LLM2Vec found the flip degrades Llama-family representations until a short masked-next-token stage repairs them.
@@ -20,13 +22,13 @@ As E1 (`configs/e2/qwen3-1.7b-base.yaml` differs from `configs/e1/qwen3-1.7b-bas
 
 ## wandb run
 
-[tt-decoder/huf32gbu](https://wandb.ai/khalit7-/tt-decoder/runs/huf32gbu), launched 2026-09-10 19:36.
+[tt-decoder/huf32gbu](https://wandb.ai/khalit7-/tt-decoder/runs/huf32gbu) (deleted 2026-09-28; export in `checkpoints/_archive/e2-qwen3-1.7b-base-ddp-bug/wandb_export.json`; not re-run), launched 2026-09-10 19:36.
 
 ## Result
 
 > **Run had bugs, so don't trust these results fully.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients: each rank trained its own replica on its half of every step and rank 0's replica was saved, so every number below is for a model trained on half the data at an effective batch of 16 (notes, D58; [the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)). Comparisons between the arms of this record stay matched, the same defect being on both sides; absolute numbers, and comparisons against FSDP-trained arms, are not. This run is not being re-run.
 
-Read from wandb `tt-decoder/huf32gbu` (training summary and the `bench/*` keys logged by `src/train/evaluate.py`; full tables in `checkpoints/e2-qwen3-1.7b-base/eval/benchmark/results.md`). E1's numbers from its entry.
+Read from wandb `tt-decoder/huf32gbu` (training summary and the `bench/*` keys logged by `src/train/evaluate.py`; full tables in `checkpoints/_archive/e2-qwen3-1.7b-base-ddp-bug/eval/benchmark/results.md`). E1's numbers from its entry.
 
 Training: 2,859 steps, 6.12 h on two GPUs (E1: 4.61 h), median 11.5k tokens/s, MFU 0.32 (E1: 15.1k, 0.42), peak 27.7 GiB. Loss after 3 smoke steps 4.50 against E1's 1.11: the mask flip starts from damaged representations, as the diagnostic predicted. Val loss caught up steadily but never fully: 0.815 / 0.715 / 0.672 / 0.638 / 0.613 / 0.595 / 0.580 / 0.564 / 0.553 / 0.543 / 0.535 / 0.527 / 0.523 / 0.520 / **0.519** at the end, against E1's 0.704 → 0.503 at the same steps; the gap shrank from 0.11 at step 200 to 0.016 at the end and was still shrinking. (Logging note: from the checkpoint at step 1879 onwards the run's `tokens_seen`, `tokens_per_s` and `mfu` fields are corrupted in the window after each checkpoint, a cross-GPU reduction of the counters returning garbage; the loss and gradient fields and the weights were unaffected, val loss stayed on trend, and the counters are computed without a reduction in later runs.)
 
@@ -45,6 +47,8 @@ Where E2 is ahead: evidence precision (+0.01 everywhere), format validity (605 r
 
 ## Verdict
 
+> **Re-read under gold = teacher (2026-09-29).** E2's cost against E1 (both abandoned DDP-bug runs, matched) is −0.014 / −0.011 overall, −0.027 / −0.017 on the full held-out cell and −0.052 / −0.048 on the no-twin zero-shot slice, so the mask flip costs most on zero-shot; E2 stays ahead on complaint (+0.024 clean) and messy eod (+0.028), and clean eod is level (0.826 against 0.821).
+
 **Disconfirmed for the pure mask flip.** E2 does not beat E1 on unseen-question macro-F1; it trails by 0.03 on both variants, outside the 0.02 gain predicted and the wrong sign. The pattern matches the "no gain without adaptation" outcome the entry named in advance: the training curve shows the flipped model spending the epoch repairing what the flip broke (val loss 0.11 behind at step 200, 0.016 behind at the end, still converging), and the deficit is largest on the longest transcripts, where bidirectional encoding was supposed to help most. The gains on complaint and eod are real but on 300 to 640 pairs each and within the noise of a single run.
 
 Per the entry's own rule, this does not yet disconfirm hypothesis 1 at 1.7B: that verdict belongs to E2+ (the flip after a matched masked-next-token adaptation stage, `../2026-09-11-e1plus-e2plus-adapted-qwen3-1.7b-base/`), already queued. What it does establish: at this size and data, flipping a causal-pretrained decoder to a bidirectional prefix at fine-tuning time alone costs about 0.015 macro-F1 overall and 0.03 on unseen questions, for 33% more training time and a much slower decode path (no vLLM), which is the opposite of what RedLLM and Bitune reported on short-prompt benchmarks.
@@ -53,6 +57,6 @@ Caveats as for E1: model-produced gold; one epoch at one learning rate; E2 decod
 
 ## Follow-ups
 
-- E2+ vs E1+ (queued): the adaptation that the diagnostic and this curve both call for.
+- E2+ vs E1+ (ran 2026-09-11, `../2026-09-11-e1plus-e2plus-adapted-qwen3-1.7b-base/`; both abandoned DDP-bug runs, not re-run): the adaptation that the diagnostic and this curve both call for.
 - If E2+ also trails: hypothesis 1 is disconfirmed at 1.7B for this task; try the 4B checkpoint before building E3, since the encoder-decoder shares the mechanism.
 - The decode path: 3.5 h per half-benchmark against vLLM's 10 minutes. If prefix-LM survives, it needs a real inference path (a bidirectional prefill kernel in vLLM, or a static KV cache and GQA-aware SDPA in the loop).

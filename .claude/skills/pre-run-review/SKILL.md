@@ -10,9 +10,9 @@ description: Mandatory two-model review gate before any expensive run. Use befor
 No training stage, adaptation stage or benchmark generation starts on the GPUs until the exact state of the tree that
 will run has been reviewed by **both** Codex gpt-6-astra and a Claude Opus agent, independently and read-only, and
 every finding either fixed or explicitly rejected in writing. Smokes (a few steps, `--smoke N`) are exempt; they are how
-the review's fixes are checked. The gate is mechanical: `scripts/gate.py` computes a hash over everything that can
-affect a run (tracked and untracked files under `src/`, `configs/`, `tests/`, `pyproject.toml`, `uv.lock`, and the queue
-script being launched) and refuses unless that hash is in `checkpoints/.reviews/approved.jsonl`. Queue scripts call the
+the review's fixes are checked. The gate is mechanical: `scripts/gate.py` computes a hash over the code and configs of a run
+(tracked and untracked files under `src/`, `configs/`, `tests/`, `pyproject.toml`, `uv.lock`, and the queue script being
+launched; not the data files a run reads, the scratchpad helpers, the generation environment or `gate.py` itself) and refuses unless that hash is in `checkpoints/.reviews/approved.jsonl`. A queue script calls the gate before every launch, including the scoring step: the evaluator is imported only when scoring runs, hours after the generation launch passed its own check, so an unreviewed evaluator edit in between would otherwise score the run (added 2026-10-05 after an audit found the gap; queue 30 was checked clean against it). Queue scripts call the
 gate before every `torchrun` and every `generate` stage; a launch without it is a violation to record in `notes.md`.
 
 Why both models: each catches things the other misses (the DDP bug was found by both; the lenient parser by both; the

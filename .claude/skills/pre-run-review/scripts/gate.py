@@ -8,7 +8,12 @@
 The hash covers every file (tracked or not, .gitignore respected) under src/, configs/, tests/, plus pyproject.toml,
 uv.lock and any extra paths given (queue scripts). Contents are hashed, not timestamps.
 """
-import argparse, hashlib, json, os, subprocess, sys, time
+import argparse
+import hashlib
+import json
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -22,8 +27,9 @@ def files(extra: list[str]) -> list[Path]:
     paths = sorted({ROOT / p for p in out if p and not p.endswith(".pyc") and "__pycache__" not in p})
     for e in extra:
         p = Path(e).resolve()
-        if p.exists():
-            paths.append(p)
+        if not p.exists():
+            sys.exit(f"gate: {e} does not exist; a launch script must be hashed, not skipped")
+        paths.append(p)
     return paths
 
 

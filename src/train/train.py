@@ -516,6 +516,14 @@ class ShardOptimizer:
         import bitsandbytes as bnb
         self.params = [p for p in model.parameters() if p.requires_grad]
         self.names = [n for n, p in model.named_parameters() if p.requires_grad]
+        # the leaf views below alias each shard's storage as it is now; FSDP2's first forward re-allocates the shard of
+        # any parameter whose first dimension does not divide by the world size (padding it), and the view would then
+        # update orphaned memory while the model trains nothing on that rank. Refuse such shapes instead of training them.
+        world = dist.get_world_size() if dist.is_initialized() else 1
+        uneven = [n for n, p in zip(self.names, self.params) if p.shape[0] % world]
+        if uneven:
+            raise SystemExit(f"fsdp: {len(uneven)} trainable parameters do not shard evenly over {world} ranks "
+                             f"(e.g. {uneven[:3]}); their optimizer views would go stale after the first forward")
         self.locals = [p.to_local().detach().requires_grad_(True) for p in self.params]  # leaves sharing the storage
         groups = param_groups_for(self.names, self.locals, cfg)
         if cfg.optim.weights == "bf16_sr":
@@ -647,6 +655,9 @@ def save_checkpoint(path: Path, model, opt, step: int, epoch: int, cfg: TrainCon
     world = dist.get_world_size() if dist.is_initialized() else 1
     if rank == 0:
         (tmp / "state.json").write_text(json.dumps({"step": step, "epoch": epoch, "world": world, "config": cfg.model_dump(mode="json")}))
+    import random
+    torch.save({"torch": torch.get_rng_state(), "cuda": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
+                "python": random.getstate()}, tmp / f"rng-rank{rank}.pt")  # every rank's streams, so a resume continues them
     if is_sharded(model):  # each rank writes its own shards: no gather, no full copy in system memory (30 GB at 7.5B)
         reshard(model)
         plain = [n for n, p in model.named_parameters() if p.requires_grad and type(p).__name__ != "DTensor"]
@@ -694,7 +705,7 @@ def val_loss(model, examples: list[Example], idx: list[int], world: int, rank: i
         micros += [micros[0]] * (int(n_all.item()) - len(micros))
     parts: dict = {"seq2seq": torch.zeros((), device=device), "seq2seq_n": 0, "mntp": torch.zeros((), device=device), "mntp_n": 0}
     for k, micro in enumerate(micros):
-        batch = make_batch([examples[i] for i in mine], micro, hash(tuple(micro)) & 0xFFFF)
+        batch = make_batch([examples[i] for i in mine], micro, hash(tuple(micro)) & 0xFFFF, eval_mode=True)  # BUG-2 padding
         loss, n = target_loss(model, batch, device, prefix_lm, mntp_weight, parts if k < int(n_local.item()) else None)
         if k < int(n_local.item()):
             total += torch.tensor([loss.item(), n], device=device)
@@ -785,11 +796,11 @@ def main() -> None:
             return total
         return st.target_tokens * supervised_share
 
-    def make_batch(examples: list[Example], micro: list[int], seed: int) -> dict:
+    def make_batch(examples: list[Example], micro: list[int], seed: int, eval_mode: bool = False) -> dict:
         if encdec:
             b = collate_encdec(examples, micro, pad_id, start_id, cut_seed[0] if seq2seq else seed, seq2seq,
                                adapt.max_target if adapt else 2048, adapt.cut if adapt else (0.25, 0.75),
-                               dec_prompt=cfg.model.decoder_sees_prompt, dec_start=not hybrid)
+                               dec_prompt=cfg.model.decoder_sees_prompt, dec_start=not hybrid, pad_encoder=eval_mode)
             return mask_encoder_side(b, mask_prob, mask_id, seed + 1) if mixed else b
         if seq2seq and adapt is not None:  # a decoder-only model under the continuation objective (E5's matched control)
             return prepare(collate_continuation(examples, micro, pad_id, cut_seed[0], adapt.max_target, adapt.cut, **pad_kw), seed)
@@ -829,7 +840,6 @@ def main() -> None:
     if rank != 0:
         (train, tstats), (val, vstats) = data()
     vidx = list(range(len(val)))
-    torch.Generator().manual_seed(cfg.seed)
     import random
     random.Random(cfg.seed).shuffle(vidx)
     vidx = sorted(vidx[:cfg.data.val_examples])
@@ -864,6 +874,15 @@ def main() -> None:
             raw.load_state_dict(torch.load(ck / "model.pt", map_location="cpu"))
             opt.load_state_dict(torch.load(ck / "optim.pt", map_location="cpu"))
         step0 = json.loads((ck / "state.json").read_text())["step"]
+        if (ck / f"rng-rank{rank}.pt").exists():  # continue the interrupted random streams (dropout, stochastic rounding)
+            import random
+            rs = torch.load(ck / f"rng-rank{rank}.pt", map_location="cpu", weights_only=False)
+            torch.set_rng_state(rs["torch"])
+            if rs.get("cuda") is not None and torch.cuda.is_available():
+                torch.cuda.set_rng_state(rs["cuda"])
+            random.setstate(rs["python"])
+        else:
+            log("  no RNG state in this checkpoint (written before 2026-10-05); random streams restart from the seed")
         log(f"resumed from {ck} at step {step0}")
 
     use_wandb = rank == 0 and not args.smoke

@@ -1,0 +1,48 @@
+# NOT RUNNABLE ON THE LOCAL PAIR OF 32 GB CARDS UNDER E1'S RECIPE: the 4b encoder + 1B decoder is about 4.9B parameters and full-parameter training with
+# fp32 masters ran out of memory on the longest records at 8k and at 4k micro-batches (measured 2026-09-28, queue 28); only a frozen-embedding
+# variant fits, which the recipe does not allow. Meant for rented hardware (one 80 GB card, DDP, or two under FSDP).
+# Adaptation stage for E5++ with the 4b encoder: the T5Gemma 2 4b text encoder (2560 wide, ~3.9B) into the Gemma 3 1B decoder (1152
+# wide) through a stitch fitted by ridge regression onto the decoder's scaled token embeddings (checkpoints/stitch/4b-to-gemma3-1b-embed.pt,
+# held-out explained variance 0.665; src/train/fit_stitch.py --target-embeddings). The continuation objective on the ++ outside-text
+# sample as the 270m and 1b stages: the encoder reads the prefix, the decoder's prefix positions carry the stitched states, up to
+# 2,048 tokens of the continuation predicted, loss on the continuation only. Everything trains, stitch at 10x; ~4.9B parameters,
+# FSDP with 8k micro-batches (the encoder runs under sdpa, as the 4B mix-and-match arms). Third point of the encoder axis at the fixed
+# 1B decoder (270m, 1b, 4b) under the recipe (D54); the matched control is E1++ on the 1B decoder, already scored.
+experiment: e5
+name: adapt-continuation-corpora-e5-t5gemma2-4b-enc-gemma3-1b
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-1b-pt                 # the decoder, E1's
+  encoder_base: google/t5gemma-2-4b-4b       # the encoder donor (its text encoder)
+  stitch: checkpoints/stitch/4b-to-gemma3-1b-embed.pt
+  arch: soft
+  decoder_sees_prompt: true
+  sharding: fsdp
+  attn: flash_attention_2   # the decoder; the T5Gemma 2 encoder has no flash-attention path and runs under sdpa
+  gradient_checkpointing: true
+adapt:
+  objective: seq2seq
+  max_target: 2048
+  cut: [0.25, 0.75]
+  corpora:   # the E1++/E2++ outside-text sample; labelled calls excluded
+    - {path: data/interim/callcenteren/train.jsonl, docs: 88933, val_docs: 100}
+    - {path: data/interim/sporc/train.jsonl, docs: 35000, val_docs: 40}
+    - {path: data/interim/meetingbank/train.jsonl, docs: 1218, val_docs: 10}
+    - {path: data/interim/courtlistener/train.jsonl, docs: 6400, val_docs: 10}
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 8192
+val_every: 500
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-pretrain
+tags: [adapt, continuation, corpora, soft-tokens, google/gemma-3-1b-pt, enc-google/t5gemma-2-4b-4b]

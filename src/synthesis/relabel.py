@@ -1,13 +1,14 @@
-"""Re-label benchmark pairs with another labeller: a second opinion, or an adjudication of disagreements.
+"""Re-label benchmark pairs with another labeller: a second opinion, or Opus over a chosen subset.
 
     uv run python -m src.synthesis.relabel <model> --families general_qa --out <file> [options]
 
-The benchmark's ground truth must be better than one local labeller's say-so, so every benchmark pair
-gets a second, independent label and the pairs the two labellers disagree on go to a stronger
-adjudicating labeller (src/synthesis/README.md "Train, val and benchmark"). This module runs either
-pass: it takes the benchmark pairs from the ledger (splits.json decides which calls are benchmark),
-labels them with <model> and writes LabelledRecords to --out, one file per labeller. Nothing here
-judges; it is LLM labelling with a different labeller, and benchmark.py reconciles the files.
+Every benchmark pair keeps the training labeller's own label as its headline gold (`label`, D61); this
+module adds other labellers' labels beside it: a second local opinion (recorded in `provenance.labels`,
+part of no gold) and Opus over the pairs the two disagree on, over the pairs with a given answer, or over every pair
+of a family, which benchmark.py stores as `opus_label`, the second gold. It takes the benchmark pairs from
+the ledger (splits.json decides which calls are benchmark), labels them with <model> and writes
+LabelledRecords to --out, one file per labeller. Nothing here judges; it is LLM labelling with a
+different labeller, and benchmark.py assembles the files.
 
 Options:
   --families F,G      question families to label (default general_qa)

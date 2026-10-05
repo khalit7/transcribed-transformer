@@ -1,7 +1,7 @@
 """(transcript, question) -> (prompt, target) examples for fine-tuning, and the batching plan.
 
 The prompt is the labelling prompt of src/synthesis/label.py without the confidence request, so
-every arm, the API baseline included, sees the same text: the numbered transcript, the question,
+every arm sees the same text: the numbered transcript, the question,
 its options with their grading rules, and the instruction to cite evidence first. The target is the
 label as compact JSON in the same order (evidence, answer, summary, tags when the question has a
 tag vocabulary). Loss is taken on the target tokens only.
@@ -259,7 +259,8 @@ def build_corpus_examples(corpora, tokenizer, max_seq_len: int, side: str, seed:
     rendered as numbered lines, truncated to max_seq_len (adaptation text, so truncation beats dropping).
     `docs`/`val_docs` per corpus set the expected sample size."""
     spec = [(str(c.path), c.docs if side == "train" else c.val_docs) for c in corpora]
-    key = hashlib.sha1(f"corpora|bos|{spec}|{side}|{seed}|{tokenizer.name_or_path}|{max_seq_len}|{limit}|{len(exclude)}".encode()).hexdigest()[:16]
+    excl = hashlib.sha1("\n".join(sorted(exclude)).encode()).hexdigest()[:12]  # the members, not the count: a changed exclusion must miss the cache
+    key = hashlib.sha1(f"corpora|bos|{spec}|{side}|{seed}|{tokenizer.name_or_path}|{max_seq_len}|{limit}|{excl}".encode()).hexdigest()[:16]
     cache = (cache_dir / f"corpora-{side}-{key}.pt") if cache_dir else None
     if cache and cache.exists():
         return _load_cache(cache)
@@ -352,9 +353,16 @@ def mask_encoder_side(batch: dict[str, torch.Tensor], mask_prob: float, mask_id:
     return {**batch, "enc_ids": enc_ids, "enc_labels": enc_labels}
 
 
+def encoder_pad_len(n: int) -> int:
+    """Padded width for a batch of T5Gemma encoder inputs whose longest row has n tokens: the next multiple of 32 strictly
+    above n, so a padding mask is always present (BUG-2, 2026-09-28; the measurement is documented on the copy in
+    src/train/generate.py). Used by evaluation-mode forwards: validation loss, the stitch fit and generation."""
+    return ((n + 32) // 32) * 32
+
+
 def collate_encdec(examples: list[Example], idx: list[int], pad_id: int, start_id: int, seed: int = 0,
                    seq2seq: bool = False, max_target: int = 2048, cut: tuple[float, float] = (0.25, 0.75),
-                   dec_prompt: bool = False, dec_start: bool = True) -> dict[str, torch.Tensor]:
+                   dec_prompt: bool = False, dec_start: bool = True, pad_encoder: bool = False) -> dict[str, torch.Tensor]:
     """Encoder/decoder batch for E3. Fine-tuning: the prompt goes to the encoder, the target (with its final
     eos) to the decoder, teacher-forced from `start_id`. seq2seq adaptation: a document is cut at a seeded
     random point in `cut`; the encoder reads the first part, the decoder predicts up to max_target tokens
@@ -373,6 +381,8 @@ def collate_encdec(examples: list[Example], idx: list[int], pad_id: int, start_i
         encs.append(ids[:c]); tgts.append(ids[c:c + max_target] if seq2seq else ids[c:])
         prefixes.append(ids[:c] if dec_prompt else ids[:0])
     ne = max(len(x) for x in encs); nt = max(off + len(p) + len(x) - 1 for p, x in zip(prefixes, tgts))
+    if pad_encoder:  # evaluation-mode forward (validation loss): never an unpadded row, see encoder_pad_len (BUG-2)
+        ne = encoder_pad_len(ne)
     enc_ids = torch.full((len(idx), ne), pad_id, dtype=torch.long); enc_mask = torch.zeros((len(idx), ne), dtype=torch.long)
     dec_ids = torch.full((len(idx), nt), pad_id, dtype=torch.long); dec_mask = torch.zeros((len(idx), nt), dtype=torch.long)
     labels = torch.full((len(idx), nt), -100, dtype=torch.long)

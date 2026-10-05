@@ -10,7 +10,7 @@ Before acting, check the working tree and current run state; preserve existing e
 
 ## What this project is
 
-Research towards models that answer compliance questions over collections of ASR call transcripts, comparing a prompted **API model** baseline with trained arms, each measured against a decoder-only control from its own model family: a causal **decoder** (E1), a **prefix-LM** decoder with bidirectional attention over the transcript (E2), an **encoder-decoder built by our own adaptation** of a decoder-only model (E3), **native encoder-decoders** and their **mix-and-match** stitches of one native encoder to a different native decoder (E4), an encoder **stitched into a different decoder's embedding space** (E5), and **hybrids** whose decoder reads both the encoder's output and the raw prompt (E6); the table in `README.md`, "Design".
+Research towards models that answer compliance questions over collections of ASR call transcripts, comparing trained arms, each measured against a decoder-only control from its own model family: a causal **decoder** (E1), a **prefix-LM** decoder with bidirectional attention over the transcript (E2), an **encoder-decoder built by our own adaptation** of a decoder-only model (E3), **native encoder-decoders** and their **mix-and-match** stitches of one native encoder to a different native decoder (E4), an encoder **stitched into a different decoder's embedding space** (E5), and **hybrids** whose decoder reads both the encoder's output and the raw prompt (E6); the table in `README.md`, "Design".
 
 The task shape: input is a case (one or more diarised ASR transcripts of calls between staff and customers, speaker-labelled turns with no role labels, one turn per line, up to tens of thousands of tokens each). Input also includes a compliance question and explicit definitions of what constitutes each of its possible answers. Output is a triple:
 
@@ -98,9 +98,9 @@ Sources are immutable under `data/raw/<dataset>/`, one folder per dataset. Deriv
 
 Every training and evaluation run logs to Weights & Biases. There is no second logging path.
 
-- **Projects**: `tt-baselines` (E0), `tt-decoder` (E1, E2), `tt-encdec` (E3, E4, E5, E6), `tt-pretrain` (continued pretraining, adaptation stages, channel-model fitting).
+- **Projects**: `tt-decoder` (E1, E2), `tt-encdec` (E3, E4, E5, E6), `tt-pretrain` (continued pretraining, adaptation stages, channel-model fitting).
 - **Log the fully resolved config** as the run config, not a path to a YAML. A run must be reproducible from wandb alone.
-- **Mandatory tags on every run**: experiment (`e0` to `e6`), base checkpoint and size. Results tables are generated from the wandb API filtered on these tags, which is what stops written numbers drifting from real ones.
+- **Mandatory tags on every run**: experiment (`e1` to `e6`), base checkpoint and size. Results tables are generated from the wandb API filtered on these tags, which is what stops written numbers drifting from real ones.
 - **Always logged**: loss, learning rate, grad norm, tokens seen, throughput (tokens/s and MFU), per-GPU memory.
 - **Evaluation logs to the same run id** as the training job that produced the checkpoint. A checkpoint's quality and its training curve are never separated.
 - **Artefacts** (tokenizer, ASR channel-model parameters, benchmark version) versioned as wandb artifacts, so any result traces back to the exact data that produced it.

@@ -17,8 +17,8 @@ The E6 decoder-only + encoder arm lets the optimiser choose between the decoder'
 
 Everything as the E6 decoder-only + encoder arm (`configs/e6/gemma3-1b-t5gemma2-enc.yaml`), the single change being `model.trainable: [encoder, cross]` (`configs/e6/gemma3-1b-t5gemma2-enc-frozen-dec.yaml`): parameter names containing neither substring are frozen (`freeze_except` in `src/train/train.py`). Learning rates unchanged (encoder at 1e-5, cross-attention at 1e-4), zero-initialised output projections, 16k cap, DDP. The backward still runs through the frozen decoder layers to reach the lower cross-attention sublayers and the encoder, so throughput is expected near the E6 decoder-only + encoder arm's; memory should be lower by the decoder's masters and optimizer state.
 
-- wandb: tt-encdec, run id TBD (`checkpoints/e6-gemma3-1b-t5gemma2-enc-frozen-dec/wandb_id`). Queue 18, after queue 17.
-- Smoke: TBD.
+- Status: built and never run. Queue 18 was postponed on 2026-09-23 in favour of the E4 mix-and-match arms and the arm has been held since; no wandb run exists and no smoke was run.
+- wandb: none.
 
 ## Result
 

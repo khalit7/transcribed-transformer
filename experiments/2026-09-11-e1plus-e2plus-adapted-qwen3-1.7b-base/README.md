@@ -2,6 +2,8 @@
 
 The follow-up that [E2](../2026-09-10-e2-prefix-lm-qwen3-1.7b-base/README.md) was planned to have if the pure flip trailed [E1](../2026-09-10-e1-qwen3-1.7b-base/README.md). Written before either run, on 2026-09-10 while E2 was at step 1600 with val loss 0.564 against E1's 0.541 at the same step (gap closing from 0.11 at step 200, but flattening).
 
+> **Gold and cell as scored here (note added 2026-09-29).** The benchmark numbers in this record were scored against the pre-D61 mixed gold (the training labeller's answer where a second local labeller agreed, Opus's where they disagreed or where Sonnet said `fail`, with union evidence keys) and their unseen-question figures include the twenty held-out questions that have twins in training. From 2026-09-29 every result is reported under two golds, gold = teacher (the training labeller's own label, the headline) and gold = opus (Opus's label on the 4,012 pairs it labelled), with the no-twin held-out slice as the zero-shot number; the re-run record (`experiments/2026-09-28-rerun-under-the-fixed-loop/`) and the README carry those. The predictions and readings below are kept as written.
+
 ## Hypothesis
 
 E2's handicap is representational, not architectural: the LLM2Vec diagnostic showed the flip alone drops Qwen3-1.7B-Base's mid-network representations to 0.49 cosine against causal, and one epoch of answer-only loss (8.5M supervised tokens) is too little to repair them. A short self-supervised stage with bidirectional attention repairs them (LLM2Vec: ~16M tokens of masked next-token prediction was enough for Llama-family models), after which the bidirectional prompt encoding should pay off. To keep the comparison to one variable, the causal arm gets a matched stage with its own objective on the same text.
@@ -27,10 +29,10 @@ Queued behind E2 (`scratchpad/queue_e1plus_e2plus.sh`): E2 generation and scorin
 
 ## wandb runs
 
-- Adaptation, causal: [tt-pretrain/hb712u6f](https://wandb.ai/khalit7-/tt-pretrain/runs/hb712u6f), 2026-09-11 09:59–10:22.
-- Adaptation, MNTP: [tt-pretrain/nsrb2e3u](https://wandb.ai/khalit7-/tt-pretrain/runs/nsrb2e3u), 10:23–10:55.
-- E1+ fine-tune: [tt-decoder/99heynpr](https://wandb.ai/khalit7-/tt-decoder/runs/99heynpr), 10:55–15:33 (4.62 h); final val loss 0.5034 (E1: 0.5027; the two curves match to ±0.001 at every check from step 1400).
-- E2+ fine-tune: [tt-decoder/397r6da5](https://wandb.ai/khalit7-/tt-decoder/runs/397r6da5), 15:33–21:42 (6.13 h); val loss 0.763 / 0.685 / 0.645 / 0.619 / 0.593 / 0.579 / 0.565 / 0.551 / (1800) / 0.534 / 0.526 / 0.519 / 0.515 / … / **0.5114** at the end, against E1's 0.704 → 0.5027 and E2's 0.815 → 0.5189 at the same steps: the adaptation removed half of E2's deficit at every point of the curve, and the remaining 0.009 gap to E1 stopped closing after step 2000.
+- Adaptation, causal: [tt-pretrain/hb712u6f](https://wandb.ai/khalit7-/tt-pretrain/runs/hb712u6f) (deleted 2026-09-28; export in `checkpoints/_archive/adapt-causal-qwen3-1.7b-base-ddp-bug/wandb_export.json`; not re-run), 2026-09-11 09:59–10:22.
+- Adaptation, MNTP: [tt-pretrain/nsrb2e3u](https://wandb.ai/khalit7-/tt-pretrain/runs/nsrb2e3u) (deleted 2026-09-28; export in `checkpoints/_archive/adapt-mntp-qwen3-1.7b-base-ddp-bug/wandb_export.json`; not re-run), 10:23–10:55.
+- E1+ fine-tune: [tt-decoder/99heynpr](https://wandb.ai/khalit7-/tt-decoder/runs/99heynpr) (deleted 2026-09-28; export in `checkpoints/_archive/e1plus-qwen3-1.7b-base-ddp-bug/wandb_export.json`; not re-run), 10:55–15:33 (4.62 h); final val loss 0.5034 (E1: 0.5027; the two curves match to ±0.001 at every check from step 1400).
+- E2+ fine-tune: [tt-decoder/397r6da5](https://wandb.ai/khalit7-/tt-decoder/runs/397r6da5) (deleted 2026-09-28; export in `checkpoints/_archive/e2plus-qwen3-1.7b-base-ddp-bug/wandb_export.json`; not re-run), 15:33–21:42 (6.13 h); val loss 0.763 / 0.685 / 0.645 / 0.619 / 0.593 / 0.579 / 0.565 / 0.551 / (1800) / 0.534 / 0.526 / 0.519 / 0.515 / … / **0.5114** at the end, against E1's 0.704 → 0.5027 and E2's 0.815 → 0.5189 at the same steps: the adaptation removed half of E2's deficit at every point of the curve, and the remaining 0.009 gap to E1 stopped closing after step 2000.
 
 ## Adaptation stage results (read before the fine-tunes)
 
@@ -44,9 +46,9 @@ Both stages: 196 steps, 19.4M tokens, 3,164 transcripts, 2 epochs, 16k-token mic
 
 > **Run had bugs, so don't trust these results fully.** The 2026-09-28 audit found that the DDP training loop never synchronised gradients: each rank trained its own replica on its half of every step and rank 0's replica was saved, so every number below is for a model trained on half the data at an effective batch of 16 (notes, D58; [the re-run record](../2026-09-28-rerun-under-the-fixed-loop/README.md)). Comparisons between the arms of this record stay matched, the same defect being on both sides; absolute numbers, and comparisons against FSDP-trained arms, are not. This run is not being re-run.
 
-**E1+ (read from wandb `tt-decoder/99heynpr`, `bench/*` keys; full tables under `checkpoints/e1plus-qwen3-1.7b-base/eval/benchmark/`).** Benchmark macro-F1 clean 0.738 / messy 0.715 (E1: 0.735 / 0.719); unseen questions 0.650 / 0.645 (E1: 0.654 / 0.652); evidence F1 0.602 / 0.567 (E1: 0.603 / 0.570); format valid 0.985 / 0.978 (E1: 0.985 / 0.979). Every slice within ±0.005 of E1 except the small vulnerability cell (0.758 / 0.786 vs 0.729 / 0.770, n = 420 / 480). The prediction that the causal stage would change little holds: E1+ is E1.
+**E1+ (read from wandb `tt-decoder/99heynpr`, `bench/*` keys; full tables under `checkpoints/_archive/e1plus-qwen3-1.7b-base-ddp-bug/eval/benchmark/`).** Benchmark macro-F1 clean 0.738 / messy 0.715 (E1: 0.735 / 0.719); unseen questions 0.650 / 0.645 (E1: 0.654 / 0.652); evidence F1 0.602 / 0.567 (E1: 0.603 / 0.570); format valid 0.985 / 0.978 (E1: 0.985 / 0.979). Every slice within ±0.005 of E1 except the small vulnerability cell (0.758 / 0.786 vs 0.729 / 0.770, n = 420 / 480). The prediction that the causal stage would change little holds: E1+ is E1.
 
-**E2+ (wandb `tt-decoder/397r6da5`; full tables under `checkpoints/e2plus-qwen3-1.7b-base/eval/benchmark/`).** Generation 22:03–06:10 through the prefix-LM loop (8.1 h). Against E1+ (which is E1 to ±0.005):
+**E2+ (wandb `tt-decoder/397r6da5`; full tables under `checkpoints/_archive/e2plus-qwen3-1.7b-base-ddp-bug/eval/benchmark/`).** Generation 22:03–06:10 through the prefix-LM loop (8.1 h). Against E1+ (which is E1 to ±0.005):
 
 | slice | variant | n | E1+ macro-F1 / evidence F1 | E2+ macro-F1 / evidence F1 |
 |---|---|---|---|---|
@@ -63,13 +65,15 @@ Relative to E2 (no adaptation): E2+ gained 0.010 / 0.002 overall and 0.014 / 0.0
 
 ## Verdict
 
+> **Re-read under gold = teacher (2026-09-29).** E1+ against E1: within 0.005 on the headline numbers, −0.011 / −0.007 on the full held-out cell. E2+ against E1+: −0.007 on the full held-out cell and −0.035 / −0.032 on the no-twin zero-shot slice; the adaptation recovered half of E2's gap overall and a third on zero-shot. All four are abandoned DDP-bug runs; matched, not results.
+
 **Disconfirmed for the adapted flip at this budget.** E2+ is below E1+ on unseen-question macro-F1 on both variants (0.637 vs 0.650, 0.632 vs 0.645), which is the entry's disconfirmation condition; the predicted +0.02 did not appear and the sign is wrong. The adaptation did what it was meant to (masked-token loss 9.13 → 2.03; half of E2's deficit removed, fine-tuning val loss 0.511 vs E2's 0.519 and E1's 0.503), and the control did nothing (E1+ = E1), so the comparison is clean. Two qualifications keep this short of a final verdict on hypothesis 1 at 1.7B: the adaptation stage was still improving when it stopped (0.05 per 50 steps at the end), which is why E2++ with a 25× larger stage on outside text is already queued; and the one place E2+ consistently wins, evidence precision (+0.02) and fewer runaway generations, is the half of the task that matters most for a compliance reviewer and was not in the prediction.
 
 What can be said now: at 1.7B, with 20M tokens of adaptation, bidirectional attention over the transcript buys better evidence selection and slightly worse answers, loses most on the longest inputs where it was expected to help most, costs 33% more training time and a 25× slower decode path. If E2++ shows the same shape with a converged adaptation, hypothesis 1 is disconfirmed at this size.
 
 ## Follow-ups
 
-- E2++ (queued, `../2026-09-11-e2pp-outside-text-adaptation/`): the same flip after ~500M tokens of masked adaptation on outside transcript text. E1++ on the same text only if E2++ beats E1+.
+- E2++ (ran 2026-09-13, `../2026-09-11-e2pp-outside-text-adaptation/`; an abandoned DDP-bug run, not re-run): the same flip after ~500M tokens of masked adaptation on outside transcript text. E1++ on the same text only if E2++ beats E1+.
 - The evidence-precision gain is consistent across E2 and E2+ (+0.01 and +0.02). Worth an error analysis of which citations the causal model adds that the bidirectional one does not (near-miss adjacent lines vs unrelated lines).
 - The long-input deficit: whether it is the flip's representations (would shrink with E2++) or the FlexAttention block sizes / prefix mask at length (would not).
 - Summary faithfulness is unscored for every arm.
