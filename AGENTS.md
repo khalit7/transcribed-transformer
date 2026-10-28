@@ -18,10 +18,11 @@ The task shape: input is a case (one or more diarised ASR transcripts of calls b
 - **evidence**: the set of line numbers supporting that answer. Line numbers refer to the transcript rendered one turn per line as `<n>: <role>: <text>` (1-based `n`, verbatim corpus role); every labeller, the judge, the benchmark and fine-tuning use that exact rendering (see `data/DATASHEET.md`, "Model input format")
 - **summary**: short reasoning for why the answer is correct
 
-Two hypotheses under test:
+Three questions (reframed 2026-10-28 from the original two hypotheses; the focus is question 3):
 
-1. **Architecture.** Long input, short structured output, with judgements that depend on the whole conversation. Bidirectional attention over the transcript should beat causal attention.
-2. **Distribution.** Models trained on written text underperform on disfluent, ASR-transcribed speech. Pretraining on transcript-like text should help.
+1. **Transcribed text** (deferred). Models trained on written text underperform on disfluent, ASR-transcribed speech; does training on transcript-like text help? Only small adaptation-stage evidence exists; the controlled test is deferred.
+2. **Bidirectional attention with the same weights** (parked). The prefix-LM mask flip on a causal decoder; a trend from abandoned DDP-bug runs, not re-run, reported only as such.
+3. **Encoder-decoder or decoder-only, and where the parameters go** (the focus). For a long input and a short structured output: is a separate encoder better than a decoder of the same size, should the capacity sit in the encoder or the decoder, and can encoders and decoders from different models be joined? Sound results so far put the capacity in the encoder; see `README.md`, "Three questions".
 
 Questions must work **zero-shot**: the question text and its answer definitions are model input, not a trained-in label set. A question never seen during training must work.
 
