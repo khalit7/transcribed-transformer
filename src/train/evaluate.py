@@ -90,6 +90,7 @@ def score_pair(r: dict, out: dict, gold_key: str = "label") -> dict:
             tag_j = 0.0
     return {"id": r["id"], "variant": out["variant"], "dataset": r["dataset"], "track": r["track"], "family": q["family"],
             "qid": q["id"], "cell": r.get("cell", "seen_q"), "prompt_tokens": out.get("prompt_tokens"), "gold_key": gold_key,
+            "difficult": (r.get("meta") or {}).get("difficult"), "over_cap": (r.get("_over_cap") or {}).get(out["variant"]),
             # a recovered answer is a failure with partial credit (`credit`), never a correct prediction: the answer
             # metrics see it as invalid, `pred_raw` keeps what it would have been
             "gold": gold_label["answer"], "pred": pred if status == "exact" else INVALID, "pred_raw": pred, "status": status,
@@ -183,6 +184,16 @@ def _slices(gold: dict, rows: list[dict], variant: str, gold_key: str, majority:
     for key in ("dataset", "family", "cell"):
         for val in sorted({r[key] for r in rows}):
             slices[f"{key}={val}"] = summarise([r for r in rows if r[key] == val])
+    # per-question slices where the question set is small (ECtHR: one binary question per article); the compliance
+    # benchmark's hundreds of questions are not sliced this way
+    qids = sorted({r["qid"] for r in rows})
+    if len(qids) <= MAX_QID_SLICES:
+        for qid in qids:
+            slices[f"qid={qid}"] = summarise([r for r in rows if r["qid"] == qid])
+    for key in ("difficult", "over_cap"):  # record-level flags: a dataset's own difficulty flag; a prompt cut to the cap (--cap-tokens)
+        vals = sorted({r[key] for r in rows if r.get(key) is not None})
+        for val in vals:
+            slices[f"{key}={val}"] = summarise([r for r in rows if r.get(key) == val])
     no_twin = [r for r in rows if r["cell"] == "unseen_q" and r["qid"] not in TWINNED_HELD_OUT]
     if no_twin:
         slices["cell=unseen_q_no_twin"] = summarise(no_twin)
@@ -224,6 +235,20 @@ def _by_gold(gold: dict, outs: list[dict], gold_key: str, teacher_majority: dict
     rows = [score_pair(gold[o["id"]], o, gold_key) for o in outs if o["id"] in have]
     majority = {qid: _majority([gold[i][gold_key]["answer"] for i in have if gold[i]["question"]["id"] == qid])
                 for qid in {gold[i]["question"]["id"] for i in have}}
+    # a question asked of a single pair in the whole split (a dataset whose every question belongs to one document) would make
+    # the floor its own gold; such questions take the majority gold over every pair that offers the same options instead
+    # (the option-position prior), so the floor stays transcript-blind. Judged over the whole split, not over `have`:
+    # a compliance question with one Opus-labelled pair among many teacher pairs keeps its per-question floor
+    per_q = collections.Counter(r["question"]["id"] for r in gold.values())
+    singles = {qid for qid in majority if per_q[qid] == 1}
+    if singles:
+        by_opts: dict[tuple, list[str]] = {}
+        for i in have:
+            by_opts.setdefault(tuple(o["value"] for o in gold[i]["question"]["options"]), []).append(gold[i][gold_key]["answer"])
+        for i in have:
+            qid = gold[i]["question"]["id"]
+            if qid in singles:
+                majority[qid] = _majority(by_opts[tuple(o["value"] for o in gold[i]["question"]["options"])])
     for r in rows:
         r["majority"] = majority[r["qid"]]
     out: dict = {"n_pairs": len(have), "variants": {}}
@@ -233,13 +258,33 @@ def _by_gold(gold: dict, outs: list[dict], gold_key: str, teacher_majority: dict
     return out, rows
 
 
-def evaluate(split: Path, outputs: Path) -> dict:
+def flag_over_cap(gold: dict, cap_tokens: int, tokenizer_dir: str) -> int:
+    """Mark every record whose full rendered prompt (as training renders it, plus the separator) exceeds `cap_tokens`,
+    so a benchmark read under head truncation can also be read on the records that were not cut. Counts the marked."""
+    from transformers import AutoTokenizer
+
+    from src.train.data import SEP, record_prompt
+    tok = AutoTokenizer.from_pretrained(tokenizer_dir)
+    n = 0
+    for r in gold.values():
+        r["_over_cap"] = {}
+        for v in r["transcript"]["variants"]:
+            r["_over_cap"][v["kind"]] = len(tok(record_prompt(r, v["kind"]) + SEP)["input_ids"]) > cap_tokens
+        n += any(r["_over_cap"].values())
+    return n
+
+
+def evaluate(split: Path, outputs: Path, cap_tokens: int | None = None, tokenizer_dir: str | None = None) -> dict:
     gold = {json.loads(l)["id"]: json.loads(l) for l in split.open()}
+    if cap_tokens:
+        if not tokenizer_dir:
+            raise SystemExit("--cap-tokens needs --tokenizer (the model directory whose tokenizer counted the prompts)")
+        flag_over_cap(gold, cap_tokens, tokenizer_dir)
     with_prov = [r for r in gold.values() if r.get("provenance")]
-    stale = [r["id"] for r in with_prov if r["provenance"].get("method") != "teacher"]
+    stale = [r["id"] for r in with_prov if r["provenance"].get("method") not in ("teacher", "dataset")]
     if with_prov and len(with_prov) != len(gold):  # a benchmark file: every record must say which gold its label is
         raise SystemExit(f"{split}: {len(gold) - len(with_prov)} records carry no provenance; a benchmark file must mark every "
-                         "label as the teacher's (rebuild it with src.synthesis.benchmark)")
+                         "label as the teacher's or the dataset's own (rebuild it with src.synthesis.benchmark)")
     if stale:  # a benchmark file whose `label` is a mixed gold (built before 2026-09-29) would be reported as the teacher's
         raise SystemExit(f"{split}: {len(stale)} records carry a pre-D61 gold (provenance.method != teacher); rebuild the "
                          "benchmark with src.synthesis.benchmark before scoring")
@@ -248,6 +293,11 @@ def evaluate(split: Path, outputs: Path) -> dict:
     result: dict = {"split": str(split), "outputs": str(outputs), "pairs_in_split": len(gold), "scored": len(rows),
                     "missing_outputs": len(rows) - len(seen),  # pairs scored as empty because no output had them
                     "gold": "teacher", "variants": teacher["variants"]}
+    # what `label` is: the training labeller's own label (D61) or, on a transfer dataset, the task's own gold
+    if with_prov and all(r["provenance"].get("method") == "dataset" for r in with_prov):
+        result["gold"], result["gold_version"] = "dataset", "dataset gold: the task's own labels"
+    else:
+        result["gold_version"] = "D61: teacher label headline, opus_label on its pairs"
     if any(r.get("opus_label") for r in gold.values()):
         teacher_majority = {qid: _majority([r["label"]["answer"] for r in gold.values() if r["question"]["id"] == qid])
                             for qid in {r["question"]["id"] for r in gold.values()}}
@@ -271,6 +321,7 @@ def evaluate(split: Path, outputs: Path) -> dict:
     return result
 
 
+MAX_QID_SLICES = 32
 HEADLINE = ["n", "format_valid", "answer_exact", "accuracy", "macro_f1", "majority_macro_f1", "ev_precision", "ev_recall",
             "ev_f1", "ev_exact", "gold_empty_matched", "tag_jaccard"]
 
@@ -300,7 +351,8 @@ def markdown(result: dict) -> str:
             f"{result['scored']} outputs scored over {result['pairs_in_split']} pairs; {result['missing_outputs']} pairs had no output "
             "and were scored as empty.\n")
     lines = [head]
-    lines += _table("Gold = teacher (the training labeller's own label, every pair)", result["variants"])
+    lines += _table("Gold = dataset (the task's own labels)" if result.get("gold") == "dataset"
+                    else "Gold = teacher (the training labeller's own label, every pair)", result["variants"])
     if result.get("opus"):
         lines += _table(f"Gold = opus (Opus's label on the {result['opus']['n_pairs']} pairs it labelled, a selected subset not comparable "
                         "with the teacher numbers; each variant's n is the pairs of that subset it has)", result["opus"]["variants"])
@@ -323,8 +375,15 @@ def main() -> None:
     ap.add_argument("out_dir", type=Path)
     ap.add_argument("--wandb-run", default=None)
     ap.add_argument("--wandb-project", default="tt-decoder")
+    ap.add_argument("--cap-tokens", type=int, default=None,
+                    help="also slice by whether the full prompt exceeded this many tokens (the head-truncation cap the run "
+                         "generated under), so the uncut records can be read on their own")
+    ap.add_argument("--tokenizer", default=None, help="model directory whose tokenizer counts the prompts for --cap-tokens")
+    ap.add_argument("--wandb-prefix", default="bench/",
+                    help="key prefix for the logged numbers; a checkpoint scored on a benchmark other than its own training "
+                         "task (the zero-shot transfer scores) logs under its own prefix so the run's bench/ keys stay its own")
     args = ap.parse_args()
-    result = evaluate(args.split, args.outputs)
+    result = evaluate(args.split, args.outputs, args.cap_tokens, args.tokenizer)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "metrics.json").write_text(json.dumps(result, indent=1))
     md = markdown(result)
@@ -333,7 +392,8 @@ def main() -> None:
     if args.wandb_run:
         import wandb
         run = wandb.init(project=args.wandb_project, id=args.wandb_run, resume="must")
-        flat = {"bench/gold_version": "D61: teacher label headline, opus_label on its pairs"}
+        pre = args.wandb_prefix
+        flat = {f"{pre}gold_version": result["gold_version"]}
         groups = [("", result["variants"]), ("shared/", result.get("shared", {}).get("variants", {}))]
         if result.get("opus"):
             groups.append(("opus/", result["opus"]["variants"]))
@@ -342,7 +402,7 @@ def main() -> None:
                 for name, s in slices.items():
                     for k in HEADLINE:
                         if s.get(k) is not None:
-                            flat[f"bench/{prefix}{variant}/{name}/{k}"] = s[k]
+                            flat[f"{pre}{prefix}{variant}/{name}/{k}"] = s[k]
         run.log(flat)
         path, online = run.path, run.settings.mode == "online"
         run.finish()
@@ -350,11 +410,14 @@ def main() -> None:
             # a re-scored run keeps only the current keys: summary entries of an earlier evaluator (other slices, other golds) go,
             # and the fresh values are written in the same update so a stale API copy can never put old numbers back
             api_run = wandb.Api().run(path)
-            for k in [k for k in list(api_run.summary.keys()) if k.startswith("bench/") and k not in flat]:  # wandb Summary, not a dict
+            for k in [k for k in list(api_run.summary.keys()) if k.startswith(pre) and k not in flat]:  # wandb Summary, not a dict
                 del api_run.summary[k]
             for k, v in flat.items():
                 api_run.summary[k] = v
             api_run.summary.update()
+        # written last: a queue that skips "already scored" runs keys on this file, so a wandb failure after metrics.json
+        # was written still re-scores (and re-logs) on the next invocation
+        (args.out_dir / "wandb.json").write_text(json.dumps({"run": path, "prefix": pre, "keys": len(flat), "online": online}))
 
 
 if __name__ == "__main__":

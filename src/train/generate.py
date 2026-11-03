@@ -20,7 +20,7 @@ import os
 import time
 from pathlib import Path
 
-from src.train.data import SEP, record_prompt
+from src.train.data import SEP, fit_prompt, record_prompt
 
 
 def encoder_pad_len(n: int) -> int:
@@ -37,17 +37,29 @@ def encoder_pad_len(n: int) -> int:
     return ((n + 32) // 32) * 32
 
 
-def load_pairs(split: Path, variants: list[str], limit: int | None) -> list[tuple[str, str, str]]:
+def load_pairs(split: Path, variants: list[str], limit: int | None, truncate_to: int | None = None,
+               tokenizer=None) -> list[tuple[str, str, str]]:
+    """(id, variant, prompt) for every pair. `truncate_to` cuts a document from the tail so the prompt fits that many
+    tokens (data.fit_prompt), the policy the transfer runs trained under; the compliance benchmarks never truncate."""
     out = []
+    n_cut = 0
+    sep_len = len(tokenizer(SEP, add_special_tokens=False)["input_ids"]) if truncate_to else 0
     for line in split.open():
         r = json.loads(line)
         have = {v["kind"] for v in r["transcript"]["variants"]}
         for v in variants:
             v = r["generation_info"]["labelled_variant"] if v == "labelled" else v
             if v in have:
-                out.append((r["id"], v, record_prompt(r, v) + SEP))
+                if truncate_to:
+                    prompt, kept = fit_prompt(r, v, tokenizer, truncate_to - sep_len)
+                    n_cut += kept < len(next(x["lines"] for x in r["transcript"]["variants"] if x["kind"] == v))
+                else:
+                    prompt = record_prompt(r, v)
+                out.append((r["id"], v, prompt + SEP))
         if limit and len(out) >= limit:
             break
+    if truncate_to:
+        print(f"{n_cut} of {len(out)} prompts truncated to {truncate_to} tokens", flush=True)
     return out
 
 
@@ -65,10 +77,25 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=16, help="prefixlm backend: sequences per batch")
     ap.add_argument("--batch-tokens", type=int, default=160_000,
                     help="stitched / soft backends: prompt-token budget per batch (160k suits a 1B encoder; a 4B encoder needs about 40k)")
+    ap.add_argument("--truncate-to", type=int, default=None,
+                    help="cut documents from the tail so every prompt fits this many tokens (the transfer runs' training policy); "
+                         "the model directory's tokenizer counts them")
     ap.add_argument("--enforce-eager", action="store_true",
                     help="vllm backend: no CUDA graphs (a model whose RoPE cache grows on demand, e.g. Hunyuan's dynamic NTK, cannot be captured)")
     args = ap.parse_args()
-    pairs = load_pairs(args.split, args.variants.split(","), args.limit)
+    tok = None
+    if args.truncate_to:
+        from transformers import AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(args.model_dir)
+    pairs = load_pairs(args.split, args.variants.split(","), args.limit, args.truncate_to, tok)
+    # a resumed output file must have been started under the same generation settings, or the rows would not be comparable
+    settings = {"model_dir": args.model_dir, "split": str(args.split), "variants": args.variants, "max_tokens": args.max_tokens,
+                "truncate_to": args.truncate_to, "backend": args.backend}
+    meta = args.out.with_suffix(args.out.suffix + ".settings.json")
+    if meta.exists():
+        earlier = json.loads(meta.read_text())
+        if earlier != settings:
+            raise SystemExit(f"{args.out} was started with other settings {earlier}; now {settings}. Remove it to regenerate.")
     done = set()
     if args.out.exists():
         done = {(json.loads(l)["id"], json.loads(l)["variant"]) for l in args.out.open()}
@@ -78,6 +105,7 @@ def main() -> None:
         return
     t0 = time.time()
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    meta.write_text(json.dumps(settings))
     if args.backend == "vllm":
         # FlashInfer's sampler fails its device-capability check on sm_120 (RTX 5090); vLLM's own sampler is fine
         os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")

@@ -45,3 +45,42 @@ def test_writer_round_trip(tmp_path, monkeypatch):
     rows = [json.loads(l) for l in (tmp_path / "demo" / "train.jsonl").open()]
     assert rows[0]["text"].startswith("SPEAKER_00: ")
     assert {r["track"] for r in rows} == {"track-p"}
+
+
+# --- transfer dataset (ECtHR): labelled-data records with the dataset's own gold ---
+
+def _ecthr_case(n: int, labels: list[int]) -> dict:
+    return {"text": [f"{n}.  The applicant was born in 19{n:02d}.", "7.  Facts continue."], "labels": labels}
+
+
+def test_ecthr_loader_decomposes_labels_and_holds_out_articles(tmp_path):
+    from src.preprocessing import ecthr
+    from src.synthesis.schema import BenchmarkRecord, LabelledRecord
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for split in ("train", "validation", "test"):
+        for task in ("a", "b"):
+            (raw / f"ecthr_{task}.{split}.jsonl").write_text(
+                json.dumps(_ecthr_case(1, [3, 9])) + "\n" + json.dumps(_ecthr_case(2, [])) + "\n")
+    s = ecthr.main(raw=raw, tasks=("a", "b"), held_out=frozenset({"9"}), out_dir=tmp_path / "out")
+    # 2 cases x 2 tasks x 10 articles, minus the held-out article's 2 questions per case per task off train and val
+    assert s["records"] == {"train": 36, "val": 36, "benchmark": 40}
+    rows = [LabelledRecord.model_validate(json.loads(l)) for l in (tmp_path / "out" / "train.jsonl").open()]
+    assert {r.question.id for r in rows} == {f"ecthr-{t}-{c}" for t in "ab" for c, _ in ecthr.ARTICLES if c != "9"}
+    by_id = {r.id: r for r in rows}
+    assert by_id["ecthr-train-00000::ecthr-a-6"].label.answer == "violated"
+    assert by_id["ecthr-train-00000::ecthr-a-2"].label.answer == "not_violated"
+    assert by_id["ecthr-train-00000::ecthr-b-6"].label.answer == "alleged"
+    assert by_id["ecthr-train-00001::ecthr-a-6"].label.answer == "not_violated"
+    assert by_id["ecthr-train-00000::ecthr-a-6"].meta["label_set"] == "6,P1-1"
+    assert rows[0].transcript.lines()[0] == "text: 1. The applicant was born in 1901."  # double space collapsed
+    b = [BenchmarkRecord.model_validate(json.loads(l)) for l in (tmp_path / "out" / "benchmark.jsonl").open()]
+    assert {x.cell for x in b if x.question.id.endswith("-9")} == {"unseen_q"}
+    assert {x.cell for x in b if not x.question.id.endswith("-9")} == {"seen_q"}
+    assert {x.provenance.method for x in b} == {"dataset"}
+
+
+def test_document_lines_never_contain_newlines():
+    from src.preprocessing.transfer import document
+    t = document(["10.  The court stated:\n\"quoted\n  passage\"", "  11.  Next. "], "t")
+    assert t.lines() == ['text: 10. The court stated: "quoted passage"', "text: 11. Next."]

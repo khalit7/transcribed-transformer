@@ -828,9 +828,13 @@ def main() -> None:
             tr = build_corpus_examples(cfg.adapt.corpora, tok, cfg.data.max_seq_len, "train", cfg.seed, exclude, cfg.data.cache_dir, limit)
             va = build_corpus_examples(cfg.adapt.corpora, tok, cfg.data.max_seq_len, "val", cfg.seed, exclude, cfg.data.cache_dir)
             return tr, va
-        build = build_transcript_examples if cfg.adapt else build_examples
-        tr = build(cfg.data.train, tok, cfg.data.variants, cfg.data.max_seq_len, cfg.data.cache_dir, limit=limit)
-        va = build(cfg.data.val, tok, ["labelled"], cfg.data.max_seq_len, cfg.data.cache_dir)
+        if cfg.adapt:
+            tr = build_transcript_examples(cfg.data.train, tok, cfg.data.variants, cfg.data.max_seq_len, cfg.data.cache_dir, limit=limit)
+            va = build_transcript_examples(cfg.data.val, tok, ["labelled"], cfg.data.max_seq_len, cfg.data.cache_dir)
+            return tr, va
+        tr = build_examples(cfg.data.train, tok, cfg.data.variants, cfg.data.max_seq_len, cfg.data.cache_dir, limit=limit,
+                            overlong=cfg.data.overlong)
+        va = build_examples(cfg.data.val, tok, ["labelled"], cfg.data.max_seq_len, cfg.data.cache_dir, overlong=cfg.data.overlong)
         return tr, va
 
     if rank == 0:  # rank 0 tokenises and writes the cache; the others wait and read it

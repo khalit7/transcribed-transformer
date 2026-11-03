@@ -723,3 +723,135 @@ def test_adaptation_documents_open_with_the_tokenizer_start_token():
     out = []
     _encode_docs([("d", "ab")], NoBos(), max_seq_len=6, eos=1, out=out)
     assert out[0].input_ids.tolist() == [97, 98, 1]
+
+
+# --- transfer datasets: the document prompt, the head-truncation policy and the singleton-question floor ---
+
+class _WordTok:
+    """A stand-in tokenizer: one token per whitespace word, so budgets are countable by hand."""
+    name_or_path = "word-stub"
+    eos_token_id = 0
+
+    def __call__(self, text, add_special_tokens=True):
+        if isinstance(text, list):
+            return {"input_ids": [self._ids(t) for t in text]}
+        return {"input_ids": self._ids(text)}
+
+    @staticmethod
+    def _ids(t: str) -> list[int]:
+        return [1] * len(t.split())
+
+
+def _doc_record(n_lines: int, words_per_line: int = 5, family: str = "transfer", rid: str = "doc-1::q-1") -> dict:
+    lines = [f"text: {' '.join(f'w{i}_{j}' for j in range(words_per_line))}" for i in range(n_lines)]
+    opts = ([{"value": "A", "criteria": "first"}, {"value": "B", "criteria": "second"}] if family == "transfer"
+            else [{"value": "pass", "criteria": "ok"}, {"value": "fail", "criteria": "bad"}])
+    return {"id": rid, "dataset": "ecthr", "track": "track-nc",
+            "question": {"id": rid.split("::")[1], "source": "written", "family": family, "text": "Which?", "description": "",
+                         "options": opts, "tags": [], "dataset_allow_list": ["ecthr"]},
+            "transcript": {"variants": [{"kind": "clean", "origin": "t", "lines": lines}], "speakers": ["text"], "role_source": "none"},
+            "label": {"answer": "A" if family == "transfer" else "pass", "evidence": [], "summary": "", "tags": [], "confidence": None},
+            "generation_info": {"name": "dataset:ecthr", "labelled_variant": "clean", "cost_usd": 0.0, "timestamp": "t"},
+            "meta": {}, "cell": "unseen_q", "provenance": {"method": "dataset", "labels": {"dataset": "A"}}, "opus_label": None}
+
+
+def test_transfer_questions_get_the_document_preamble_and_compliance_questions_keep_theirs():
+    from src.train.data import record_prompt
+    doc = record_prompt(_doc_record(3), "clean")
+    assert doc.startswith("You answer questions about a document. One paragraph per line, numbered. Each line starts with the fixed label text.")
+    assert "1: text: w0_0" in doc and '"answer": "<one of [\'A\', \'B\']>"' in doc
+    conv = record_prompt(_doc_record(3, family="general_qa"), "clean")
+    assert conv.startswith("You assess conversation transcripts for quality assurance. One turn per line, numbered.")
+    assert "speaker's role as recorded by the source (text)" in conv
+    pod = record_prompt(_doc_record(3, family="podcast"), "clean")
+    assert pod.startswith("You answer questions about the transcript of a podcast episode. One turn per line, numbered.")
+    assert "host_1, host_2, ... for the hosts, guest_1, guest_2, ... for the guests, or the source's diarisation tag for any other voice (text)" in pod
+    assert "1. text:w0_0" in pod  # v2 line format (D76)
+
+
+def test_fit_prompt_keeps_the_head_and_respects_the_budget():
+    from src.train.data import fit_prompt, record_prompt
+    tok = _WordTok()
+    r = _doc_record(40)
+    full, kept = fit_prompt(r, "clean", tok, 10_000)
+    assert kept == 40 and full == record_prompt(r, "clean")
+    full_tokens = len(tok(full)["input_ids"])
+    budget = full_tokens - 60  # a dozen lines' worth of document (5 words + the "n: text:" prefix each)
+    cut, kept = fit_prompt(r, "clean", tok, budget)
+    assert 0 < kept < 40
+    assert len(tok(cut)["input_ids"]) <= budget < len(tok(record_prompt(r, "clean", kept + 1))["input_ids"])
+    assert "1: text: w0_0" in cut and "w39_0" not in cut  # head kept, tail cut
+    _, none = fit_prompt(r, "clean", tok, 5)  # not even one line fits: the caller drops the record
+    assert none == 0
+
+
+def test_build_examples_drops_or_truncates_overlong_records_as_configured(tmp_path):
+    from src.train.data import build_examples
+    tok = _WordTok()
+    split = tmp_path / "train.jsonl"
+    with split.open("w") as f:
+        f.write(json.dumps(_doc_record(400, rid="doc-long::q-1")) + "\n")  # 2,400 document words
+        f.write(json.dumps(_doc_record(4, rid="doc-short::q-2")) + "\n")
+    cap = 1000
+    ex, st = build_examples(split, tok, ["labelled"], cap)
+    assert [e.id for e in ex] == ["doc-short::q-2"] and st["dropped_too_long"] == 1 and st["truncated"] == 0
+    ex, st = build_examples(split, tok, ["labelled"], cap, overlong="truncate")
+    assert [e.id for e in ex] == ["doc-long::q-1", "doc-short::q-2"] and st["dropped_too_long"] == 0 and st["truncated"] == 1
+    assert all(len(e.input_ids) <= cap for e in ex) and ex[0].n_target == ex[1].n_target
+
+
+def test_singleton_questions_take_the_option_set_majority_as_their_floor():
+    from src.train.evaluate import _by_gold
+    gold = {}
+    for i, ans in enumerate(["A", "A", "B"]):
+        r = _doc_record(2, rid=f"doc-{i}::q-{i}")
+        r["label"]["answer"] = ans
+        gold[r["id"]] = r
+    outs = [{"id": i, "variant": "clean", "prompt_tokens": 10,
+             "text": json.dumps({"evidence": [], "answer": gold[i]["label"]["answer"], "summary": ""})} for i in gold]
+    res, rows = _by_gold(gold, outs, "label")
+    assert {r["majority"] for r in rows} == {"A"}  # not each question's own gold
+    floor = res["variants"]["clean"]["floor=majority_answer"]
+    assert floor["accuracy"] == pytest.approx(2 / 3) and res["variants"]["clean"]["overall"]["accuracy"] == 1.0
+
+
+def test_evaluate_names_a_dataset_gold(tmp_path):
+    from src.train.evaluate import evaluate
+    split, outs = tmp_path / "benchmark.jsonl", tmp_path / "gen.jsonl"
+    recs = [_doc_record(2, rid=f"doc-{i}::q-{i}") for i in range(2)]
+    split.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    outs.write_text("".join(json.dumps({"id": r["id"], "variant": "clean", "prompt_tokens": 10,
+                                        "text": json.dumps({"evidence": [], "answer": "A", "summary": ""})}) + "\n" for r in recs))
+    result = evaluate(split, outs)
+    assert result["gold_version"].startswith("dataset gold") and result["variants"]["clean"]["overall"]["accuracy"] == 1.0
+
+
+def test_singleton_rule_is_judged_over_the_whole_split_and_slices_follow_the_flags():
+    from src.train.evaluate import _by_gold
+    gold = {}
+    for i, (qid, ans, diff) in enumerate([("q-a", "A", True), ("q-a", "B", False), ("q-b", "B", False)]):
+        r = _doc_record(2, rid=f"doc-{i}::{qid}")
+        r["label"]["answer"] = ans
+        r["meta"] = {"difficult": diff}
+        r["_over_cap"] = {"clean": i == 2}
+        gold[r["id"]] = r
+    # q-a has two pairs in the split but only one carries the (opus-like) second gold: its floor stays its own majority
+    gold["doc-0::q-a"]["opus_label"] = dict(gold["doc-0::q-a"]["label"], answer="B")
+    gold["doc-2::q-b"]["opus_label"] = dict(gold["doc-2::q-b"]["label"])
+    outs = [{"id": i, "variant": "clean", "prompt_tokens": 10,
+             "text": json.dumps({"evidence": [], "answer": gold[i]["label"]["answer"], "summary": ""})} for i in gold]
+    res, rows = _by_gold(gold, outs, "opus_label")
+    maj = {r["id"]: r["majority"] for r in rows}
+    assert maj["doc-0::q-a"] == "B"  # one opus pair, but q-a is not a singleton in the split: per-question floor kept
+    assert maj["doc-2::q-b"] == "B"  # a true singleton: majority over the same option set (B, B)
+    slices = res["variants"]["clean"]
+    assert {"qid=q-a", "qid=q-b", "difficult=True", "difficult=False", "over_cap=True", "over_cap=False"} <= set(slices)
+    assert slices["over_cap=True"]["n"] == 1 and slices["difficult=True"]["n"] == 1
+
+
+def test_flag_over_cap_counts_the_rendered_prompt(tmp_path, monkeypatch):
+    import src.train.evaluate as ev
+    monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", lambda *_a, **_k: _WordTok(), raising=False)
+    gold = {f"doc-{n}::q-{n}": _doc_record(n, rid=f"doc-{n}::q-{n}") for n in (2, 400)}
+    assert ev.flag_over_cap(gold, 1000, "ignored") == 1
+    assert gold["doc-400::q-400"]["_over_cap"] == {"clean": True} and gold["doc-2::q-2"]["_over_cap"] == {"clean": False}
