@@ -39,7 +39,7 @@ PHONE_SR = 8_000
 def _preload_nvidia_libs() -> None:
     """ctranslate2 dlopens cuDNN/cuBLAS at model load; the pip nvidia wheels
     are not on the loader path, so preload them with RTLD_GLOBAL."""
-    import nvidia  # noqa: F401  (namespace package from the wheels)
+    import nvidia
 
     for pkg_dir in nvidia.__path__:
         for lib in sorted(glob.glob(f"{pkg_dir}/*/lib/*.so*")):

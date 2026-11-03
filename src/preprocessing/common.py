@@ -53,7 +53,7 @@ class Writer:
     def __init__(self, name: str):
         self.dir = INTERIM / name
         self.dir.mkdir(parents=True, exist_ok=True)
-        self._files = {s: open(self.dir / f"{s}.jsonl", "w") for s in ("train", "val")}
+        self._files = {s: open(self.dir / f"{s}.jsonl", "w") for s in ("train", "val")}  # noqa: SIM115  (closed by close())
         self.docs = {"train": 0, "val": 0}
         self.words = {"train": 0, "val": 0}
         self.turns = 0
