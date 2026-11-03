@@ -11,7 +11,7 @@ No training stage, adaptation stage or benchmark generation starts on the GPUs u
 will run has been reviewed by **both** Codex gpt-6-astra and a Claude Opus agent, independently and read-only, and
 every finding either fixed or explicitly rejected in writing. Smokes (a few steps, `--smoke N`) are exempt; they are how
 the review's fixes are checked. The gate is mechanical: `scripts/gate.py` computes a hash over the code and configs of a run
-(tracked and untracked files under `src/`, `configs/`, `tests/`, `pyproject.toml`, `uv.lock`, and the queue script being
+(tracked and untracked files under `src/`, `configs/`, `tests/`, the prompt-template folders `data/labelled_data/prompts/` and `data/labelled_data_v2/prompts/`, `pyproject.toml`, `uv.lock`, and the queue script being
 launched; not the data files a run reads, the scratchpad helpers, the generation environment or `gate.py` itself) and refuses unless that hash is in `checkpoints/.reviews/approved.jsonl`. A queue script calls the gate before every launch, including the scoring step: the evaluator is imported only when scoring runs, hours after the generation launch passed its own check, so an unreviewed evaluator edit in between would otherwise score the run (added 2026-10-05 after an audit found the gap; queue 30 was checked clean against it). Queue scripts call the
 gate before every `torchrun` and every `generate` stage; a launch without it is a violation to record in `notes.md`.
 
@@ -35,6 +35,10 @@ the one that looked risky.
      default model in `~/.codex/config.toml` is gpt-6-astra; pass `-m gpt-6-astra` if it is not.
    - Opus: the `Agent` tool with `model: opus`, prompt "Read <brief path> and carry out exactly the review it describes,
      read-only", and the same output format.
+   - **Without Codex access (from 2026-10-28)**: two Opus agents, launched in the same message from the same brief, each
+     writing to its own report file and neither shown the other's findings. The two reports are then compared: a
+     finding one made and the other did not is verified with the same care as a shared one. The approval note names
+     both reviewers as Opus and says Codex was unavailable.
 4. **Verify every finding against the code yourself** before accepting it: reproduce it with a tiny script or a test
    where it is cheap (the DDP check took one minute on CPU with two gloo ranks). Fix what is real, add a test where a
    test is possible, run `pytest` and `ruff`. Reject in writing what is wrong, with the reason.

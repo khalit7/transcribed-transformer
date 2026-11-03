@@ -5,8 +5,9 @@
     gate.py approve --note "..."       record the current hash as reviewed (appends to checkpoints/.reviews/approved.jsonl)
     gate.py check [queue-script ...]   exit 0 if the current hash is approved, else print what differs from the last approval and exit 1
 
-The hash covers every file (tracked or not, .gitignore respected) under src/, configs/, tests/, plus pyproject.toml,
-uv.lock and any extra paths given (queue scripts). Contents are hashed, not timestamps.
+The hash covers every file (tracked or not, .gitignore respected) under src/, configs/, tests/, the prompt-template
+folders data/labelled_data/prompts/ and data/labelled_data_v2/prompts/, plus pyproject.toml, uv.lock and any extra paths
+given (queue scripts). Contents are hashed, not timestamps.
 """
 import argparse
 import hashlib
@@ -18,7 +19,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
 REVIEWS = ROOT / "checkpoints" / ".reviews" / "approved.jsonl"
-ROOTS = ["src", "configs", "tests", "pyproject.toml", "uv.lock"]
+ROOTS = ["src", "configs", "tests", "pyproject.toml", "uv.lock",
+         "data/labelled_data/prompts", "data/labelled_data_v2/prompts"]  # the prompt templates every model sees
 
 
 def files(extra: list[str]) -> list[Path]:
