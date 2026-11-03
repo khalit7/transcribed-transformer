@@ -21,6 +21,7 @@ import concurrent.futures
 import datetime as dt
 import json
 
+from src import prompts
 from src.synthesis import llm
 from src.synthesis.llm import ask_json, set_claude_account
 from src.synthesis.question_bank import OUT_DIR
@@ -50,19 +51,14 @@ def load_cache() -> dict[str, dict]:
     return out
 
 
+PROMPT = prompts.V1 / "identify_speakers.txt"  # one host per episode (v1)
+
+
 def prompt(turns: list[tuple[str, str]]) -> str:
     tags = list(dict.fromkeys(t for t, _ in turns))
     shown = turns if len(turns) <= HEAD + TAIL else turns[:HEAD] + [("...", "[middle of the episode omitted]")] + turns[-TAIL:]
     body = "\n".join(f"{t}: {x}" for t, x in shown)
-    return f"""Below are the opening and closing turns of a podcast episode, transcribed with automatic speaker diarisation. The speaker tags are {', '.join(tags)}.
-
-Which tag is the HOST: the person who runs the show, introduces the episode and any guests, asks the questions, reads sponsor messages, and closes? If there are co-hosts, name the one who does most of the running. If no tag can be identified as the host, answer null.
-
-TRANSCRIPT
-{body}
-
-Respond with a single JSON object and nothing else:
-{{"host": "<one of {tags}> or null", "confidence": <0-1>, "reason": "<one sentence>"}}"""
+    return prompts.render(PROMPT, tag_names=", ".join(tags), body=body, tags_repr=tags)
 
 
 def identify(doc_id: str, turns: list[tuple[str, str]], model: str = DEFAULT_MODEL) -> dict:

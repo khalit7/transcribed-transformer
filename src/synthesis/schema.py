@@ -26,8 +26,13 @@ from typing import Literal
 
 from pydantic import BaseModel, model_validator
 
-Answer = Literal["pass", "fail", "partial_pass", "NA"]
-Family = Literal["vulnerability", "complaint", "eod", "general_qa"]  # eod = expression of dissatisfaction
+# The compliance vocabulary. A `transfer` question (a public long-input short-output dataset used to test whether the
+# architecture findings hold off the compliance task; ECtHR) supplies its own option values instead.
+COMPLIANCE_ANSWERS = ("pass", "fail", "partial_pass", "NA")
+Answer = str
+# eod = expression of dissatisfaction; transfer = a public dataset with its own gold (ECtHR); podcast = the v2 long-episode
+# bank (src/synthesis_v2/question_bank.py), whose options are its own vocabulary like transfer's
+Family = Literal["vulnerability", "complaint", "eod", "general_qa", "transfer", "podcast"]
 Track = Literal["track-p", "track-nc"]
 
 
@@ -54,10 +59,16 @@ class Question(BaseModel):
     @model_validator(mode="after")
     def _at_least_pass_fail(self) -> "Question":
         values = self.values
-        if "pass" not in values or "fail" not in values:
-            raise ValueError(f"{self.id}: options must include pass and fail")
+        if len(values) < 2:
+            raise ValueError(f"{self.id}: a question needs at least two options")
         if len(values) != len(set(values)):
             raise ValueError(f"{self.id}: duplicate option values")
+        if self.family not in ("transfer", "podcast"):
+            if "pass" not in values or "fail" not in values:
+                raise ValueError(f"{self.id}: options must include pass and fail")
+            bad = set(values) - set(COMPLIANCE_ANSWERS)
+            if bad:
+                raise ValueError(f"{self.id}: options outside the compliance vocabulary: {sorted(bad)}")
         return self
 
     @property
@@ -160,11 +171,19 @@ class LabelledRecord(BaseModel):
     ablation: Ablation | None = None
     meta: dict = {}
 
+    @model_validator(mode="after")
+    def _answer_is_an_option(self) -> "LabelledRecord":
+        # Answer is a plain str since the transfer family arrived; the vocabulary check is against the question's options
+        if self.label.answer not in self.question.values:
+            raise ValueError(f"{self.id}: answer {self.label.answer!r} is not among the options {self.question.values}")
+        return self
+
 
 class Provenance(BaseModel):
     """Who labelled a benchmark record (benchmark.py). `method` is `teacher` for every record built from 2026-09-29 on
-    (the headline gold is the training labeller's own label; the older values name how a mixed gold was settled)."""
-    method: Literal["teacher", "single", "agreement", "adjudicated", "blind", "pending"]
+    (the headline gold is the training labeller's own label; the older values name how a mixed gold was settled); `dataset` is a transfer dataset's own gold
+    (no labeller)."""
+    method: Literal["teacher", "dataset", "single", "agreement", "adjudicated", "blind", "pending"]
     labels: dict[str, Answer]  # every labeller's answer, keyed by labeller name
     opus_labeller: str | None = None  # the labeller whose label is `opus_label` (Opus; `claude:opus blind` for a blind pass), when there is one
     adjudicator: str | None = None  # older records: the labeller whose label was the gold when adjudicated or blind

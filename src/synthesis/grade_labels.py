@@ -35,6 +35,7 @@ import random
 import string
 from pathlib import Path
 
+from src import prompts
 from src.synthesis import llm
 from src.synthesis.label import numbered
 from src.synthesis.llm import LLMError, ask_json, set_claude_account
@@ -60,6 +61,9 @@ def schema(letters: list[str], answers: list[str]) -> dict:
             "required": ["judge_evidence", "judge_answer", "judge_tags", "grades"]}
 
 
+PROMPT = prompts.V1 / "grade_labels.txt"  # the judge's prompt
+
+
 def prompt(rec: LabelledRecord, labels: list[tuple[str, LabelledRecord]]) -> str:
     q = rec.question
     lines = rec.transcript.lines("clean")
@@ -73,28 +77,13 @@ def prompt(rec: LabelledRecord, labels: list[tuple[str, LabelledRecord]]) -> str
     labels_txt = "\n".join(shown)
     letters = [x for x, _ in labels]
     grade_fields = ", ".join(f'"{x}": {{"answer_correct": <bool>, "evidence": <0-2>, "summary": <0-2>, "tags": <0-2 or null>, "reason": "<one sentence>"}}' for x in letters)
-    return f"""You are the judge of automatic labels for a conversation-transcript quality-assurance task. One turn per line, numbered; each line starts with the speaker's role as recorded by the source ({', '.join(rec.transcript.speakers)}).
-
-TRANSCRIPT
-{numbered(lines)}
-
-QUESTION: {q.text}{ctx}
-Answer options and grading rules:
-{opts}{tag_txt}
-
-Several labellers answered this question. Each gave an answer, the line numbers it treats as evidence, and a summary of its reasoning{', and tags' if q.tags else ''}:
-
-{labels_txt}
-
-Work in this order. First answer the question yourself: list every line that bears on it, then decide the answer strictly by the rules{', then list the tags that apply' if q.tags else ''}. Then grade every label independently against the transcript and the rules, not against the other labels:
-- answer_correct: true only if the label's answer is the one the rules give for this transcript.
-- evidence: 2 if the cited lines support the label's answer and cover the material that decides it; 1 if they partly support it or miss lines that matter; 0 if they are irrelevant, contradict the answer, or the list is empty when evidence exists.
-- summary: 2 if the summary is faithful to the transcript and justifies the answer; 1 if faithful but thin or partly beside the point; 0 if it asserts things the transcript does not say or contradicts the label's own answer.
-- tags: {'2 if the tags match the characteristics actually disclosed, 1 if partly, 0 if wrong or missing' if q.tags else 'null (this question takes no tags)'}.
-Judge a label on what it actually cites and says; a right answer with wrong evidence gets answer_correct true and a low evidence score.
-
-Respond with a single JSON object and nothing else:
-{{"judge_evidence": [<line numbers>], "judge_answer": "<one of {q.values}>", "judge_tags": [<tags or empty>], "grades": {{{grade_fields}}}}}"""
+    return prompts.render(
+        PROMPT, speakers=", ".join(rec.transcript.speakers), transcript=numbered(lines), question=q.text, context=ctx, options=opts,
+        tags_rule=tag_txt, and_tags=", and tags" if q.tags else "", labels=labels_txt,
+        then_tags=", then list the tags that apply" if q.tags else "",
+        tags_grading=("2 if the tags match the characteristics actually disclosed, 1 if partly, 0 if wrong or missing" if q.tags
+                      else "null (this question takes no tags)"),
+        values=q.values, grade_fields=grade_fields)
 
 
 def load(files: list[Path]) -> dict[str, dict[str, LabelledRecord]]:

@@ -1,0 +1,43 @@
+You answer questions about the transcript of a podcast episode. One turn per line, numbered. Each line starts with a speaker label: host_1, host_2, ... for the hosts, guest_1, guest_2, ... for the guests, or the source's diarisation tag for any other voice (host_1, guest_1).
+
+TRANSCRIPT
+1. host_1:this is turn number 0 about Nashville and the Grand Ole Opry
+2. guest_1:this is turn number 1 about Nashville and the Grand Ole Opry
+3. host_1:this is turn number 2 about Nashville and the Grand Ole Opry
+4. guest_1:this is turn number 3 about Nashville and the Grand Ole Opry
+5. host_1:this is turn number 4 about Nashville and the Grand Ole Opry
+6. guest_1:this is turn number 5 about Nashville and the Grand Ole Opry
+7. host_1:this is turn number 6 about Nashville and the Grand Ole Opry
+8. guest_1:this is turn number 7 about Nashville and the Grand Ole Opry
+9. host_1:this is turn number 8 about Nashville and the Grand Ole Opry
+10. guest_1:this is turn number 9 about Nashville and the Grand Ole Opry
+11. host_1:this is turn number 10 about Nashville and the Grand Ole Opry
+12. guest_1:this is turn number 11 about Nashville and the Grand Ole Opry
+
+Answer each of the following 3 questions about this transcript, independently of each other.
+
+QUESTION v2-arc-05-new-subject-after-wrap-up: After a host starts to wrap up the episode, does any speaker raise a subject that was not discussed earlier?
+Context: Definitions. A host is any speaker whose label starts with host (host_1, host_2, ...); a guest is any speaker whose label starts with guest (guest_1, guest_2, ...); the numbers only tell people apart. A non-host speaker is any speaker with a label that does not start with host, guests included. Each label is one speaker. Listeners are the audience of the podcast. 'Later' means in a later line. 'Explicitly' means in words that name the act. Previous episodes and talk that happened before the recording are outside this episode. Speaker labels are taken as written. Where an episode has several instances, the option that needs 'every' applies only if all instances meet it. 'After another subject has been discussed in between' means that between the two points the speakers said at least two full sentences about something else. The main conversation starts when a host first names what the episode is about, after greetings, introductions and any list of what the episode will cover. A host starts to wrap up by thanking a non-host speaker, saying the episode is ending ('before we go', 'that's all for today') or signing off.
+Answer options and grading rules:
+- new_subject: A host starts to wrap up, and after that a speaker raises a subject that no line before the wrap-up discussed.
+- no_new_subject: A host starts to wrap up, and everything said after that is thanks, sign-off, requests to listeners or subjects already discussed.
+- none: No host starts to wrap up the episode before the transcript ends.
+
+QUESTION v2-cmt-02-promise-to-listener: Does a speaker promise listeners specific content later in this episode, and is it delivered?
+Context: Definitions. A host is any speaker whose label starts with host (host_1, host_2, ...); a guest is any speaker whose label starts with guest (guest_1, guest_2, ...); the numbers only tell people apart. A non-host speaker is any speaker with a label that does not start with host, guests included. Each label is one speaker. Listeners are the audience of the podcast. 'Later' means in a later line. 'Explicitly' means in words that name the act. Previous episodes and talk that happened before the recording are outside this episode. Speaker labels are taken as written. Where an episode has several instances, the option that needs 'every' applies only if all instances meet it. 'After another subject has been discussed in between' means that between the two points the speakers said at least two full sentences about something else. The main conversation starts when a host first names what the episode is about, after greetings, introductions and any list of what the episode will cover. A promise sounds like 'I'll give you the three steps' or 'stay with us for the answer'. The list of what the episode will cover, given before the main conversation starts, is not a promise here. Show notes and future episodes do not count.
+Answer options and grading rules:
+- delivered: Every such promise is fulfilled in a later line.
+- not_delivered: At least one such promise is never fulfilled in this episode.
+- none: No speaker promises listeners specific content for later in this episode.
+
+QUESTION v2-qa-01-host-question-unanswered: Does a host ask a non-host speaker a direct question that is never answered?
+Context: Definitions. A host is any speaker whose label starts with host (host_1, host_2, ...); a guest is any speaker whose label starts with guest (guest_1, guest_2, ...); the numbers only tell people apart. A non-host speaker is any speaker with a label that does not start with host, guests included. Each label is one speaker. Listeners are the audience of the podcast. 'Later' means in a later line. 'Explicitly' means in words that name the act. Previous episodes and talk that happened before the recording are outside this episode. Speaker labels are taken as written. Where an episode has several instances, the option that needs 'every' applies only if all instances meet it. 'After another subject has been discussed in between' means that between the two points the speakers said at least two full sentences about something else. The main conversation starts when a host first names what the episode is about, after greetings, introductions and any list of what the episode will cover. A question is responded to when the speaker asked says something that addresses what it asks; 'I don't know' is a response, and a question with several parts is responded to if any part is. Greetings, questions the host says need no answer, and questions the host rephrases before anyone replies do not count.
+Answer options and grading rules:
+- all_answered: Every direct question a host asks a non-host speaker is responded to, in the next lines or later.
+- some_unanswered: At least one direct question a host asks a non-host speaker is never responded to in this episode.
+- none: No host asks a non-host speaker a direct question.
+
+For each question, work in this order: first find and list every line that bears on the question (empty list if nothing in the transcript relates to it); then decide the answer strictly by the rules; then write one or two sentences of reasoning that refer to what was said; finally give your confidence in the answer as a number from 0 to 1.
+
+Respond with a single JSON object keyed by question id and nothing else:
+{"v2-arc-05-new-subject-after-wrap-up": {"evidence": [<line numbers>], "answer": "<one of the options>", "summary": "<reasoning>", "confidence": <0-1>}, "v2-cmt-02-promise-to-listener": {"evidence": [<line numbers>], "answer": "<one of the options>", "summary": "<reasoning>", "confidence": <0-1>}, "v2-qa-01-host-question-unanswered": {"evidence": [<line numbers>], "answer": "<one of the options>", "summary": "<reasoning>", "confidence": <0-1>}}

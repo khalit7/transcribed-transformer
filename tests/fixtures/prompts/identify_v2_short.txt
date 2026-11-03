@@ -1,0 +1,60 @@
+Below are the opening and closing turns of a podcast episode, transcribed with automatic speaker diarisation (consecutive fragments of one tag are merged into one turn). The speaker tags are SPEAKER_00 (17 turns), SPEAKER_01 (17 turns), SPEAKER_02 (16 turns).
+
+First, what KIND of recording is this? "conversation": people talking as themselves on a show (an interview, a panel, co-hosts chatting, a call-in). "scripted": a radio play, audio drama, audiobook or other fiction performed by voices playing characters, even if a narrator opens and closes it. "other": anything else (a sermon or lecture with a few interjections, a private phone call, a recording of a live event with no show structure).
+
+Which tags are HOSTS: the people who run the show, introduce the episode and any guests, ask the questions, read sponsor messages and close? A show may have one host or several co-hosts; name every tag that is a host. Which tags are GUESTS: people who take part in the conversation without running the show (an interviewee, a panellist, a caller)? A voice in a played clip or advert, a pre-recorded announcer and a tag that only utters fragments are neither host nor guest; leave them out of both lists. A tag is never in both lists. If no tag can be identified as a host, answer an empty hosts list. Only name a tag you have seen speak above. Finally, SAME_PERSON: diarisation sometimes splits one person across two tags (the same name, the same role, continuing each other's sentences); list each such group of tags, or an empty list if every tag is a different person.
+
+TRANSCRIPT
+SPEAKER_00: turn 0
+SPEAKER_01: turn 1
+SPEAKER_02: turn 2
+SPEAKER_00: turn 3
+SPEAKER_01: turn 4
+SPEAKER_02: turn 5
+SPEAKER_00: turn 6
+SPEAKER_01: turn 7
+SPEAKER_02: turn 8
+SPEAKER_00: turn 9
+SPEAKER_01: turn 10
+SPEAKER_02: turn 11
+SPEAKER_00: turn 12
+SPEAKER_01: turn 13
+SPEAKER_02: turn 14
+SPEAKER_00: turn 15
+SPEAKER_01: turn 16
+SPEAKER_02: turn 17
+SPEAKER_00: turn 18
+SPEAKER_01: turn 19
+SPEAKER_02: turn 20
+SPEAKER_00: turn 21
+SPEAKER_01: turn 22
+SPEAKER_02: turn 23
+SPEAKER_00: turn 24
+SPEAKER_01: turn 25
+SPEAKER_02: turn 26
+SPEAKER_00: turn 27
+SPEAKER_01: turn 28
+SPEAKER_02: turn 29
+SPEAKER_00: turn 30
+SPEAKER_01: turn 31
+SPEAKER_02: turn 32
+SPEAKER_00: turn 33
+SPEAKER_01: turn 34
+SPEAKER_02: turn 35
+SPEAKER_00: turn 36
+SPEAKER_01: turn 37
+SPEAKER_02: turn 38
+SPEAKER_00: turn 39
+SPEAKER_01: turn 40
+SPEAKER_02: turn 41
+SPEAKER_00: turn 42
+SPEAKER_01: turn 43
+SPEAKER_02: turn 44
+SPEAKER_00: turn 45
+SPEAKER_01: turn 46
+SPEAKER_02: turn 47
+SPEAKER_00: turn 48
+SPEAKER_01: turn 49
+
+Respond with a single JSON object and nothing else:
+{"kind": "conversation" | "scripted" | "other", "hosts": [<zero or more of SPEAKER_00, SPEAKER_01, SPEAKER_02>], "guests": [<zero or more of SPEAKER_00, SPEAKER_01, SPEAKER_02>], "same_person": [[<two or more tags>], ...] or [], "confidence": <0-1>, "reason": "<one sentence>"}

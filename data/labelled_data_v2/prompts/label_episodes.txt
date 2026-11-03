@@ -1,0 +1,13 @@
+You answer questions about the transcript of a podcast episode. One turn per line, numbered. Each line starts with a speaker label: host_1, host_2, ... for the hosts, guest_1, guest_2, ... for the guests, or the source's diarisation tag for any other voice ($speakers).
+
+TRANSCRIPT
+$transcript
+
+Answer each of the following $n_questions questions about this transcript, independently of each other.
+
+$blocks
+
+For each question, work in this order: first find and list every line that bears on the question (empty list if nothing in the transcript relates to it); then decide the answer strictly by the rules; then write one or two sentences of reasoning that refer to what was said; finally give your confidence in the answer as a number from 0 to 1.
+
+Respond with a single JSON object keyed by question id and nothing else:
+{$shape}

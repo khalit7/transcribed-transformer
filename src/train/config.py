@@ -15,6 +15,9 @@ class DataConfig(BaseModel):
     max_seq_len: int = 32768
     val_examples: int = 512  # val-loss subset, fixed by seed
     cache_dir: Path = Path("data/interim/sft")
+    # a record longer than max_seq_len: drop (the compliance data, whose evidence lines could fall in a cut) or truncate
+    # the document from the tail so its head is read (the transfer datasets, which carry no evidence; data.fit_prompt)
+    overlong: Literal["drop", "truncate"] = "drop"
 
 
 class ModelConfig(BaseModel):

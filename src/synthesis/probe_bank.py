@@ -17,6 +17,7 @@ import itertools
 import json
 import random
 
+from src import prompts
 from src.synthesis.cases import BUILDERS, ID_STREAMS
 from src.synthesis.llm import (
     OLLAMA_URLS,
@@ -78,10 +79,8 @@ def main() -> None:
 
     def probe(case: Case) -> tuple[dict, float]:
         lines = "\n".join(f"{n + 1}: {ln}" for n, ln in enumerate(case.transcript.lines("clean")))
-        roles = ", ".join(case.transcript.speakers)
-        prompt = (f"Transcript, one turn per line, each prefixed by the speaker's role as recorded by the source ({roles}).\n\nTRANSCRIPT\n{lines}\n\n"
-                  f"Answer EVERY question below strictly by its option criteria, for this call as it stands.\n\n{qtext}\n\n"
-                  'Respond with one JSON object mapping each question id to its answer value, e.g. {"gen-01-greeting": "pass", ...}. Nothing else.')
+        prompt = prompts.render(prompts.V1 / "probe_bank.txt", speakers=", ".join(case.transcript.speakers), transcript=lines,
+                                questions=qtext)
         return ask_json(prompt, args.model, route=index[case.id])
 
     dist: dict[str, collections.Counter] = {q.id: collections.Counter() for q in qs}

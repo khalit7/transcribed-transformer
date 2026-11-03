@@ -14,6 +14,7 @@ labeller's say-so.
 
 import json
 
+from src import prompts
 from src.synthesis.llm import ask_json
 from src.synthesis.schema import Ablation, Case, Label, Question, Verification
 
@@ -36,26 +37,17 @@ def schema_for(q: Question) -> dict:
     return {"type": "object", "properties": props, "required": required}
 
 
+PROMPT = prompts.V1 / "label.txt"  # the v1 labeller's prompt, one question per call
+
+
 def prompt(lines: list[str], speakers: list[str], q: Question) -> str:
-    role_txt = f"Each line starts with the speaker's role as recorded by the source ({', '.join(speakers)})."
     opts = "\n".join(f"- {o.value}: {o.criteria}" for o in q.options)
     ctx = f"\nContext: {q.description}" if q.description else ""
     tag_txt = ("\nThe answer must also carry tags chosen only from this list (empty list if none applies): "
                + "; ".join(q.tags)) if q.tags else ""
     tag_field = ', "tags": ["<tag>", ...]' if q.tags else ""
-    return f"""You assess conversation transcripts for quality assurance. One turn per line, numbered. {role_txt}
-
-TRANSCRIPT
-{numbered(lines)}
-
-QUESTION: {q.text}{ctx}
-Answer options and grading rules:
-{opts}{tag_txt}
-
-Work in this order: first find and list every line that bears on the question (empty list if nothing in the transcript relates to it); then decide the answer strictly by the rules; then write one or two sentences of reasoning that refer to what was said. Finally give your confidence in the answer as a number from 0 to 1.
-
-Respond with a single JSON object and nothing else:
-{{"evidence": [<line numbers>], "answer": "<one of {q.values}>", "summary": "<reasoning>", "confidence": <0-1>{tag_field}}}"""
+    return prompts.render(PROMPT, speakers=", ".join(speakers), transcript=numbered(lines), question=q.text, context=ctx,
+                          options=opts, tags_rule=tag_txt, values=q.values, tag_field=tag_field)
 
 
 def _parse(resp: dict, q: Question, n_lines: int) -> Label:

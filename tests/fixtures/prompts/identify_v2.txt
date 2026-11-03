@@ -1,0 +1,114 @@
+Below are the opening and closing turns of a podcast episode, transcribed with automatic speaker diarisation (consecutive fragments of one tag are merged into one turn). The speaker tags are SPEAKER_00 (99 turns), SPEAKER_01 (100 turns), SPEAKER_02 (100 turns), SPEAKER_05 (1 turns).
+
+First, what KIND of recording is this? "conversation": people talking as themselves on a show (an interview, a panel, co-hosts chatting, a call-in). "scripted": a radio play, audio drama, audiobook or other fiction performed by voices playing characters, even if a narrator opens and closes it. "other": anything else (a sermon or lecture with a few interjections, a private phone call, a recording of a live event with no show structure).
+
+Which tags are HOSTS: the people who run the show, introduce the episode and any guests, ask the questions, read sponsor messages and close? A show may have one host or several co-hosts; name every tag that is a host. Which tags are GUESTS: people who take part in the conversation without running the show (an interviewee, a panellist, a caller)? A voice in a played clip or advert, a pre-recorded announcer and a tag that only utters fragments are neither host nor guest; leave them out of both lists. A tag is never in both lists. If no tag can be identified as a host, answer an empty hosts list. Only name a tag you have seen speak above. Finally, SAME_PERSON: diarisation sometimes splits one person across two tags (the same name, the same role, continuing each other's sentences); list each such group of tags, or an empty list if every tag is a different person.
+
+TRANSCRIPT
+SPEAKER_00: turn 0
+SPEAKER_01: turn 1
+SPEAKER_02: turn 2
+SPEAKER_00: turn 3
+SPEAKER_01: turn 4
+SPEAKER_02: turn 5
+SPEAKER_00: turn 6
+SPEAKER_01: turn 7
+SPEAKER_02: turn 8
+SPEAKER_00: turn 9
+SPEAKER_01: turn 10
+SPEAKER_02: turn 11
+SPEAKER_00: turn 12
+SPEAKER_01: turn 13
+SPEAKER_02: turn 14
+SPEAKER_00: turn 15
+SPEAKER_01: turn 16
+SPEAKER_02: turn 17
+SPEAKER_00: turn 18
+SPEAKER_01: turn 19
+SPEAKER_02: turn 20
+SPEAKER_00: turn 21
+SPEAKER_01: turn 22
+SPEAKER_02: turn 23
+SPEAKER_00: turn 24
+SPEAKER_01: turn 25
+SPEAKER_02: turn 26
+SPEAKER_00: turn 27
+SPEAKER_01: turn 28
+SPEAKER_02: turn 29
+SPEAKER_00: turn 30
+SPEAKER_01: turn 31
+SPEAKER_02: turn 32
+SPEAKER_00: turn 33
+SPEAKER_01: turn 34
+SPEAKER_02: turn 35
+SPEAKER_00: turn 36
+SPEAKER_01: turn 37
+SPEAKER_02: turn 38
+SPEAKER_00: turn 39
+SPEAKER_01: turn 40
+SPEAKER_02: turn 41
+SPEAKER_00: turn 42
+SPEAKER_01: turn 43
+SPEAKER_02: turn 44
+SPEAKER_00: turn 45
+SPEAKER_01: turn 46
+SPEAKER_02: turn 47
+SPEAKER_00: turn 48
+SPEAKER_01: turn 49
+SPEAKER_02: turn 50
+SPEAKER_00: turn 51
+SPEAKER_01: turn 52
+SPEAKER_02: turn 53
+SPEAKER_00: turn 54
+SPEAKER_01: turn 55
+SPEAKER_02: turn 56
+SPEAKER_00: turn 57
+SPEAKER_01: turn 58
+SPEAKER_02: turn 59
+SPEAKER_00: turn 60
+SPEAKER_01: turn 61
+SPEAKER_02: turn 62
+SPEAKER_00: turn 63
+SPEAKER_01: turn 64
+SPEAKER_02: turn 65
+SPEAKER_00: turn 66
+SPEAKER_01: turn 67
+SPEAKER_02: turn 68
+SPEAKER_00: turn 69
+SPEAKER_01: turn 70
+SPEAKER_02: turn 71
+SPEAKER_00: turn 72
+SPEAKER_01: turn 73
+SPEAKER_02: turn 74
+SPEAKER_00: turn 75
+SPEAKER_01: turn 76
+SPEAKER_02: turn 77
+SPEAKER_00: turn 78
+SPEAKER_01: turn 79
+...: [middle of the episode omitted]
+SPEAKER_01: turn 280
+SPEAKER_02: turn 281
+SPEAKER_00: turn 282
+SPEAKER_01: turn 283
+SPEAKER_02: turn 284
+SPEAKER_00: turn 285
+SPEAKER_01: turn 286
+SPEAKER_02: turn 287
+SPEAKER_00: turn 288
+SPEAKER_01: turn 289
+SPEAKER_02: turn 290
+SPEAKER_00: turn 291
+SPEAKER_01: turn 292
+SPEAKER_02: turn 293
+SPEAKER_00: turn 294
+SPEAKER_01: turn 295
+SPEAKER_02: turn 296
+SPEAKER_00: turn 297
+SPEAKER_01: turn 298
+SPEAKER_02: turn 299
+
+TAGS THAT DO NOT APPEAR ABOVE, with their first two turns:
+[turn 151 of 300] SPEAKER_05: caller
+
+Respond with a single JSON object and nothing else:
+{"kind": "conversation" | "scripted" | "other", "hosts": [<zero or more of SPEAKER_00, SPEAKER_01, SPEAKER_02, SPEAKER_05>], "guests": [<zero or more of SPEAKER_00, SPEAKER_01, SPEAKER_02, SPEAKER_05>], "same_person": [[<two or more tags>], ...] or [], "confidence": <0-1>, "reason": "<one sentence>"}

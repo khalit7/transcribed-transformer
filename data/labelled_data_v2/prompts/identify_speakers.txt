@@ -1,0 +1,11 @@
+Below are the opening and closing turns of a podcast episode, transcribed with automatic speaker diarisation (consecutive fragments of one tag are merged into one turn). The speaker tags are $tag_list.
+
+First, what KIND of recording is this? "conversation": people talking as themselves on a show (an interview, a panel, co-hosts chatting, a call-in). "scripted": a radio play, audio drama, audiobook or other fiction performed by voices playing characters, even if a narrator opens and closes it. "other": anything else (a sermon or lecture with a few interjections, a private phone call, a recording of a live event with no show structure).
+
+Which tags are HOSTS: the people who run the show, introduce the episode and any guests, ask the questions, read sponsor messages and close? A show may have one host or several co-hosts; name every tag that is a host. Which tags are GUESTS: people who take part in the conversation without running the show (an interviewee, a panellist, a caller)? A voice in a played clip or advert, a pre-recorded announcer and a tag that only utters fragments are neither host nor guest; leave them out of both lists. A tag is never in both lists. If no tag can be identified as a host, answer an empty hosts list. Only name a tag you have seen speak above. Finally, SAME_PERSON: diarisation sometimes splits one person across two tags (the same name, the same role, continuing each other's sentences); list each such group of tags, or an empty list if every tag is a different person.
+
+TRANSCRIPT
+$body
+
+Respond with a single JSON object and nothing else:
+{"kind": "conversation" | "scripted" | "other", "hosts": [<zero or more of $tag_names>], "guests": [<zero or more of $tag_names>], "same_person": [[<two or more tags>], ...] or [], "confidence": <0-1>, "reason": "<one sentence>"}

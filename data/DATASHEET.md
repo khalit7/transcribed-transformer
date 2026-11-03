@@ -4,11 +4,11 @@ The datasets this project holds: what each one is, where it lives, how big it is
 
 ## Overview
 
-`data/` holds only data; all code lives in `src/`. Sources are immutable under `data/raw/<dataset>/`, one folder per dataset. Derived artefacts — `data/interim/<name>/{train,val}.jsonl` and `data/packed/<stage>/` token streams — are regenerable and not documented here.
+`data/` holds only data; all code lives in `src/` (the prompt templates count as data: `data/labelled_data/prompts/` and `data/labelled_data_v2/prompts/`, tracked, each with a README). Sources are immutable under `data/raw/<dataset>/`, one folder per dataset. Derived artefacts — `data/interim/<name>/{train,val}.jsonl` and `data/packed/<stage>/` token streams — are regenerable and not documented here.
 
 Measurement provenance: token counts are measured on the local copy with the tokenizer named per entry, never copied from a dataset card. Counts dated 2026-07-29 (AMI, Taskmaster) were produced with the ModernBERT-large tokenizer by pre-reset code and stand until those modules are rewritten; counts dated 2026-09-02 come from `src/preprocessing/pack.py` with the provisional Qwen3 tokenizer. `TBD` means not yet measured; nothing here is estimated.
 
-No raw sample is committed (all of `data/` except the three sheets is gitignored), so the examples quoted below are the canonical record of what each corpus looks like.
+No raw sample is committed (all of `data/` except the three sheets and the two prompt-template folders is gitignored), so the examples quoted below are the canonical record of what each corpus looks like.
 
 Keep this file current when a dataset is added, removed, or re-scoped.
 
@@ -35,7 +35,7 @@ Licence says whether we *may* use a corpus. Tier says how close it is to the dis
 
 ## Summary — the single source of truth for ALL data
 
-**Use** says what each corpus is actually for, because two different things draw on this table: **L** = labelling case source, i.e. the conversations that `src/synthesis` labels for the compliance task (only corpora with speaker roles qualify: AppTek, Taskmaster, ACI-Bench, and SPoRC with its host identified); **T** = pretraining text for the transcript-pretraining hypothesis (packed mixtures under `configs/mixtures/`); **C** = channel-model reference (paired verbatim/ASR); **—** = on disk, not used. Waves: **w1** = 2026-07 (initial ingests), **w2** = the 2026-08-31 acquisition round (tranche 1 of the [survey queue](SURVEYSHEET.md#ranked-ingestion-queue)). Status vocabulary: `raw on disk` = licence verified and downloaded, no preprocessing module yet; `interim` = `data/interim/<name>/` written by its `src/preprocessing/` module; `packed (<stage>)` = in a built mixture under `data/packed/`. `—` means not applicable. Token counts name their tokenizer (*Qwen3* = provisional pack tokenizer, see below; *ModernBERT* = pre-reset 2026-07-29 measurement).
+**Use** says what each corpus is actually for, because two different things draw on this table: **L** = labelling case source, i.e. the conversations that `src/synthesis` labels for the compliance task (only corpora with speaker roles qualify: AppTek, Taskmaster, ACI-Bench, and SPoRC with its host identified); **X** = transfer benchmark for question 3 (a public long-input short-output task with its own gold, never mixed into L or T); **T** = pretraining text for the transcript-pretraining hypothesis (packed mixtures under `configs/mixtures/`); **C** = channel-model reference (paired verbatim/ASR); **—** = on disk, not used. Waves: **w1** = 2026-07 (initial ingests), **w2** = the 2026-08-31 acquisition round (tranche 1 of the [survey queue](SURVEYSHEET.md#ranked-ingestion-queue)). Status vocabulary: `raw on disk` = licence verified and downloaded, no preprocessing module yet; `interim` = `data/interim/<name>/` written by its `src/preprocessing/` module; `packed (<stage>)` = in a built mixture under `data/packed/`. `—` means not applicable. Token counts name their tokenizer (*Qwen3* = provisional pack tokenizer, see below; *ModernBERT* = pre-reset 2026-07-29 measurement).
 
 | Dataset | Added | Use | Status | Role | Track | Tier | SA | Local path | Raw size (MB) | Tokens | License |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -48,6 +48,7 @@ Licence says whether we *may* use a corpus. Tier says how close it is to the dis
 | [MeetingBank](https://huggingface.co/datasets/huuuyeah/meetingbank) | w2 | T | **packed (nc_v1)** | NC long-context tier 1 pretraining text; summary supervision | **NC** | **1** | — | `data/raw/meetingbank/` | 110 | **23,534,451** Qwen3 (19,921,133 words; 1,249 whole meetings from 6,892 items) | CC-BY-NC-SA-4.0 |
 | [CallCenterEN](https://huggingface.co/datasets/AIxBlock/92k-real-world-call-center-scripts-english) | w2 | T | **packed (nc_v1)** | NC in-domain tier 1 pretraining text (service calls) | **NC** | **1** | — | `data/raw/callcenteren/` | 1,433 | **99,437,272** Qwen3 (66,897,886 words; 90,831 calls after dedupe of 95,953 files) | CC-BY-NC-4.0 |
 | [SPoRC](https://huggingface.co/datasets/blitt/SPoRC) | w2 | **L**, T | **packed (nc_v1)**, conversational subset | NC pretraining backbone: diarised conversational turns at scale | **NC** | **1** | — | `data/raw/sporc/` | 29,184 | **4,373,956,442** Qwen3 (conversational subset: 364,970 of 1,124,058 episodes, 2,810,792,362 words); full source 4,585,128,049 by its own token_count | research gate (accepted 2026-09-01) |
+| [ECtHR, LexGLUE A + B](https://huggingface.co/datasets/coastalcph/lex_glue) | w3 | **X** | records built (`data/labelled_data/ecthr/`) | question-3 transfer benchmark: Convention articles violated / alleged from the facts of a case, own gold | **NC** (the Court's terms are non-commercial) | 3 | — | `data/raw/ecthr/` | 228 | **25,435,959** Gemma 3 (case text, 11,000 cases); rendered prompts p50 1,766; on disk: task A, Articles 8 and 10 held out, 72,000 / 8,000 / 10,000 records | HF card cc-by-4.0, unverified; Court terms non-commercial |
 
 **Provisional tokenizer (2026-09-02)**: token counts marked *Qwen3* are measured with the Qwen3 tokenizer (`Qwen/Qwen3-1.7B`, ungated, a plausible decoder base) via the pack step. It is provisional: each arm repacks with its own tokenizer and `meta.json` records which. Earlier counts marked *ModernBERT* (2026-07-29) predate the reset.
 
@@ -65,7 +66,7 @@ Licence says whether we *may* use a corpus. Tier says how close it is to the dis
 
 Pipeline rule (applies to every row): each source lands in `data/raw/<name>/` via a script in `scripts/`, gets a preprocessing module (`src/preprocessing/<name>.py`) producing `data/interim/<name>/{train,val}.jsonl` — one document per line with `source, doc_id, track, tier, asr_system, has_speakers, n_turns, n_words, text, meta`; `text` is `SPEAKER_NN: utterance` one turn per line where the source has turns, and flat text with `has_speakers=false` where it does not (no invented turn boundaries) — split 2% val by container hash (call / episode / argument / meeting, never by turn), and enters training only through a mixture manifest (`configs/mixtures/*.yaml`) packed by `src/preprocessing/pack.py` into `data/packed/<stage>/` with per-source token counts and a tokenizer fingerprint in `meta.json`. The packer refuses a manifest whose sources carry mixed licence tracks.
 
-## Labelled data (training and benchmarking)
+## Labelled data v1 (training and benchmarking; the compliance questions, 2026-09)
 
 Labelled (transcript, question) → (evidence, answer, summary) records live in `data/labelled_data/`, generated by `src/synthesis/` (`uv run python -m src.synthesis.synth_data <backend:model> <num_transcripts> <families>`; backends `claude:` via `claude -p` or `ollama:` for local models; since 2026-09-04 the rare-event families vulnerability/complaint/eod are labelled by Claude Sonnet and general_qa by the local qwen3.8, over the same transcripts, per the labeller-selection study in `experiments/2026-09-03-labeller-selection/`). Nothing under the directory is tracked in git (the question bank's source of truth is `src/synthesis/question_bank.py`, which is); a releasable Track P copy is produced by `python -m src.synthesis.export --track p`.
 
@@ -107,6 +108,74 @@ Found by the benchmark-construction and whole-codebase audits of 2026-09-29 and 
 - **Evidence keys** are one labeller's lines (the teacher's under gold = teacher, Opus's under gold = opus), never marked exhaustive; evidence recall is a lower bound. The scorer scores the key as written: an empty key means empty, and an `NA` answer whose labeller cited lines is scored against those lines.
 - **Rare-event families** have 21 to 32 gold positives per detection question under gold = teacher (AppTek: dissatisfaction 32, vulnerability present 26, complaint 21; SPoRC vulnerability disclosed 23), and 0 to 7 on Taskmaster and ACI-Bench; no rare-event claim is possible on those two corpora.
 - **AppTek as training text.** 72% of training pairs are AppTek calls although the card states an evaluation-only intent and this sheet's row says "never training text": that row describes the corpus's role as pretraining text (it is not packed), and the labelled pairs built on its calls are used for the research-only fine-tune, a decision recorded here rather than reversed. No call is shared between splits.
+
+## Labelled data v2 (long podcast episodes; pool built 2026-10-30, labels TBD)
+
+The second iteration of the labelled data, kept apart from v1 in every file: records under `data/labelled_data_v2/`
+(`episodes.jsonl` the episode pool, `questions.jsonl` the bank, then the ledger, splits and `train/val/benchmark.jsonl`
+as v1 has them), code under `src/synthesis_v2/`, its own experiment record. Purpose: a long-input, short-output dataset
+in the target modality (real diarised ASR) whose answers depend on the whole transcript, to test where capacity should
+go when the input is long; the public transfer datasets could not (see `experiments/2026-10-28-transfer-grid/`). Source:
+SPoRC only (Track NC, tier 1; the row above), so nothing derived from v2 is released.
+
+**Episode pool** (`src/synthesis_v2/episodes.py`, seed 0): the conversational SPoRC subset (357,690 episodes)
+filtered to 2 to 4 speakers (dropped 112,201), at least 40 turns (25,584),
+no episode or podcast the v1 labelling touched (7,603), a known duration and at least 90
+words per minute so partial transcripts are excluded (3,859),
+and a rendered length inside one of the strata (2,313 outside every band);
+206,130 eligible. Candidates were then measured exactly and dropped as monologues when the second speaker held
+under 10% of the words (495) or as collapsed
+transcripts when one line held over 25% of the words (254).
+At most two episodes per podcast. Strata by the exact Gemma 3 token count of the rendered transcript (`n: SPEAKER_NN:
+text`, one turn per line, before the host is renamed); the first three fit the 16k training cap, the fourth is labelled
+and parked for a longer-context run. Pool: **7,000 episodes from 6,326 podcasts**; categories business 1112, society 919, education 691, sports 648, religion 521, news 472, health 437, comedy 407, arts 376, leisure 314, tv 311, music 189.
+
+| Stratum | Episodes | Tokens min / p50 / p90 / max | Turns p50 / p90 | Speakers 2 / 3 / 4 |
+|---|---|---|---|---|
+| `2-4k` | 2,000 | 2,000 / 3,228 / 3,869 / 3,998 | 66 / 128 | 1084 / 608 / 308 |
+| `4-8k` | 2,000 | 4,002 / 4,717 / 6,204 / 7,992 | 137 / 266 | 862 / 717 / 421 |
+| `8-16k` | 2,000 | 8,003 / 11,071 / 14,468 / 15,495 | 231 / 456 | 498 / 847 / 655 |
+| `16-32k` | 1,000 | 16,003 / 19,379 / 25,310 / 31,960 | 631 / 1065 | 39 / 381 / 580 |
+
+**Rendering and strata revised (owner's decision, 2026-11-01).** v2 transcripts are rendered with no preprocessing: one
+corpus turn per line exactly as SPoRC distributes it, `n: <speaker tag>: <utterance>`, without merging same-speaker
+fragments, removing non-speech tokens, collapsing repetition loops or splitting long turns. The strata become `0-4k`,
+`4-8k`, `8-12k` and `12-16k` on that rendering, about 6,000 episodes in all, starting from the current pool re-bucketed;
+the table above is the seed-0 draw under the old strata. Line format (owner's decision, same day): v2 transcripts are
+rendered `<line_number>. <speaker tag>:<utterance>`, with the identified `host_N` / `guest_N` labels in training and
+labelling (other voices keep their diarisation tag); this is v2's exception to the "Model input format" above, which v1
+keeps. Strata are sized on `<line_number>. <SPEAKER_NN>:<utterance>`, the corpus's own tags: **2,028 / 1,996 / 1,209 /
+777** buildable conversations in `0-4k` / `4-8k` / `8-12k` / `12-16k`. Selection (2026-11-01, `src/synthesis_v2/strata.py`):
+**1,500 / 1,500 / 1,500 / 1,500** episodes (6,000; one `0-4k` episode from the nearest cell of one that no draw could fill; 3,704 reused, 2,467 newly drawn and identified, 31 of those rejected),
+each stratum allocated to cells by a measured population sample, the top stratum capped at 14,808 sizing tokens so the
+longest prompt plus a 700-token answer fits in 16,384; ids in `data/labelled_data_v2/selected_ids.txt`, per-stratum
+statistics in the v2 experiment record.
+
+**Question bank v2** (`src/synthesis_v2/question_bank.py`, family `podcast`, 43 candidate questions after a second round of six common-trigger relational questions on 2026-10-31, 13 proposed held out of training as the zero-shot cell, 13 parametrised templates; the pilot's measured agreement and answer distributions fix the final bank at the owner's target of 30 trained and 10 held out): written for podcasts after three independent analyses
+of the pool (one grounded in reading 24 episodes, one from the long-input QA literature, one adversarial) and three
+independent clarity audits that rewrote every question against a shared set of definitions; every question pairs two
+places in the episode or asks a global negative, no question refers to a line range, and questions the pool showed to
+be decidable from the opening or closing 300 words were excluded. Hosts are rendered `host_1:`, `host_2:` and guests `guest_1:`, `guest_2:`
+in order of first appearance (co-hosted shows are common; the pilot ran with every host as `host:`, changed 2026-10-31)
+and questions speak of "a host" and "a non-host speaker". After two pilots (2026-10-31) the bank held 40 questions,
+26 trained and 14 held out; on 2026-11-01 the 14 that take a per-episode name or topic argument were removed, so no
+question takes an argument. On 2026-11-02 a further pilot on the verbatim rendering (120 episodes, 30 per stratum of
+0-4k / 4-8k / 8-12k / 12-16k) re-tested the 26 remaining questions (19 passed) and 26 new argument-free candidates (25
+passed): the approved bank is **44 questions, 32 trained and 12 held out**, in `questions.jsonl`. Candidates not yet
+piloted would go to `questions_provisional.jsonl`, which exists only while there are any (none now). The 37 removed ids
+stay listed in the bank file as `REMOVED`; per-question tables in `data/labelled_data_v2/pilot/report_r4a.md`,
+`report_r4b.md` and `report_r5.md`. Speaker roles are identified for all 6,120
+in-cap episodes (2026-11-01: 430 from SPoRC's own labels where complete, the rest by Sonnet; the pool was topped up by 120
+episodes with a second seed so that every in-cap stratum holds at least 2,000 conversations the identifier accepts):
+6,010 buildable conversations, 2,004 / 2,004 / 2,002 by stratum; pool 7,120 episodes including the parked 16-32k stratum. **Pilot (2026-10-31):** 117 episodes (40 per in-cap stratum drawn, 3 without an identifiable host), one Opus pass (the gold, 4,139 labels, $112.86 as the CLI reports it) and one Sonnet pass (4,139 labels, $55.31), seven questions per call. Bank-mean Opus-against-Sonnet kappa by stratum 0.678 / 0.709 / 0.671 (the pre-registered stop rule, under 0.40 at 8–16k or 0.20 below 2–4k, did not fire). 23 questions survive the pre-registered cut rules, 13 are cut (7 for agreement under 0.40 in a stratum, 6 for `none` or one answer above the skew thresholds), 1 is unmeasurable; per-question table in `data/labelled_data_v2/pilot/report.md`. **Production labelling (2026-11-02):** all 6,000 selected episodes x 44 questions by Opus through one lean `claude -p` call per episode (all questions at once, shared definitions printed once, minimal system prompt, no tools, no prompt caching), into `labelled_data.jsonl`; on 60 pilot episodes this route agreed with the pilot's Opus labels at 0.916 against Opus's own run-to-run 0.914, at 6.4x lower cost (see the v2 experiment record). In progress; not yet complete.
+
+**Known limitations, recorded before labelling.** Diarisation: in a 600-episode sample the median episode has 38% of
+its lines at two words or fewer, lines can hold two speakers' words, and tags swap; evidence line numbers inherit that
+noise, and questions attribute content only to the host against anyone else. SPoRC's own `host_speaker_labels` cover
+1,364 of the 6,615 episodes of the first pool build and agree with the v1 Sonnet identification on 306 of 349 where
+both exist, so the host is identified by the labeller as in v1 and SPoRC's label is kept as a cross-check. Episode
+descriptions (used to seed the parametrised topic questions) are present for 5,999 of 6,615 first-pool episodes at 80
+characters or more.
 
 ## AMI Meeting Corpus
 
@@ -230,5 +299,38 @@ Known quality problems: podcast register (ads, intros, music segments transcribe
 **Examples** (turns/text, verbatim; truncated):
 
 1. `SPEAKER_00:  Welcome to the Big Mx Radio Podcast. Brought to you by MedTerra CBD. You can go to MedTerra CBD.com right now and enter discount code Big Mx Radio 15 to say 15% on every single one of your orders.`
+
+## Transfer dataset for question 3 (added 2026-10-28; re-scoped to one dataset 2026-10-30)
+
+One public long-input, short-output task with its own gold, added to test whether the capacity finding (the encoder is where the parameters pay) holds off the compliance task. It is **written text, tier 3, never spoken**: the test is about architecture at matched size, not about the ASR distribution, so the channel model is not applied (corrupting a reading passage would change the task, not the register) and it says nothing about question 1. It is **Track NC** by the ambiguity rule; the tracks govern release only, and nothing derived from it will be released. Two further datasets were added with it on 2026-10-28 (SCOTUS and QuALITY, both from the same survey) and removed on 2026-10-30 before any arm trained on them, with their raw files, records, loaders and configs; the reasons are in the transfer-grid record (`experiments/2026-10-28-transfer-grid/`, Setup, scope change) and the survey sheet's refused list. It enters no pretraining pack and not the compliance labelled data: it has its own `data/labelled_data/ecthr/{train,val,benchmark}.jsonl`, built by `src/preprocessing/ecthr.py` from the gitignored raw cache, in the labelled-data record schema so fine-tuning, generation and scoring read it unchanged. Where the records differ from the compliance ones they say so: the input is a document, one paragraph per line with the fixed label `text` where a speaker role would stand (`transcript.role_source` records it; the model still sees `<n>: text: <paragraph>`); the question's `family` is `transfer` and its options are the dataset's own; `label.evidence` is empty and `label.summary` blank because neither is annotated; benchmark records carry `provenance.method = "dataset"` and no second gold. Token counts below are Gemma 3 tokens (`google/gemma-3-270m` tokenizer, the Gemma arms' own), `add_special_tokens=False`; "prompt" is the full rendered prompt as `src/train/data.py` builds it (instructions, numbered document, question, options), "target" the JSON the model is trained to emit.
+
+### ECtHR (LexGLUE tasks A and B)
+
+- **Role:** transfer benchmark, legal judgement from the facts of a case: which articles of the European Convention on Human Rights the Court found violated (task A) and which the applicant alleged (task B); Chalkidis et al. 2021 (ECtHR), 2022 (LexGLUE) · **Path:** `data/raw/ecthr/ecthr_{a,b}.{train,validation,test}.jsonl` (exported from the Hub dataset 2026-10-28) → `data/labelled_data/ecthr/` · **Size:** 228 MB raw, 2.5 GB records (the case text is repeated in each of its twenty records) · **Source:** https://huggingface.co/datasets/coastalcph/lex_glue, configs `ecthr_a`, `ecthr_b`
+- **Licence:** the dataset card's licence field says `cc-by-4.0` with "[More Information Needed]" in the prose; the LexGLUE repository has no LICENSE file; the source archive says the texts are "scraped and publicly available under hudoc.echr.coe.int" with no licence; the Court's own terms (https://www.echr.coe.int/copyright-and-disclaimer, read 2026-10-28) authorise reproduction "provided the source is acknowledged (© ECHR-CEDH)" for private use or for information and education related to the Court's activities, free of charge, with any other use including commercial use needing prior written permission. → **Track NC** (non-commercial by the Court's own words). Redistribution: raw and derived records stay local; any mention of the text credits ECHR-CEDH Council of Europe.
+- **Tier:** **3**, written text (the facts section of judgments, as the Court drafted them). Justification: the architecture test, above.
+- **Records:** the set-valued label is decomposed into **one binary question per article**, ten for task A (`violated | not_violated`) and ten for task B (`alleged | not_alleged`), which matches the compliance task's shape (one question, one answer from the options in the prompt), lets macro-F1 handle the imbalance per question, and gives a zero-shot cell by holding out articles. **The build on disk (2026-10-28, for the transfer grid) is task A only with Articles 8 and 10 held out** (`--tasks a --held-out 8,10`): their questions are dropped from train and val (72,000 / 8,000 records remain, eight questions per case) and marked `cell = unseen_q` on the benchmark (2,000 of 10,000 records; 123 and 77 positive cases). Articles 8 and 10 were chosen because they have enough positives to score and are not the dominant Article 6; the rare Articles 9 and 14 (5 and 16 test positives) could not carry a cell. Official splits map train → train, validation → val, test → benchmark. Paragraphs are kept verbatim, one per line, with the dataset's own paragraph numbers at the start of each (so a line reads `text: 5. The applicant was born in 1983 ...`; whitespace inside a paragraph, including the embedded newlines of quoted passages in 45% of cases, is collapsed to single spaces so every paragraph is one numbered line). Cases over the 16k training cap are written, not dropped: 59 / 7 / 3 rendered prompts per split exceed 16,384 tokens; the training loader applies the cap.
+
+| Split | Cases | Records, full A + B build | `violated` / `not_violated` (A, all ten articles) | `alleged` / `not_alleged` (B) | Records, build on disk (A, Articles 8 and 10 held out) | `violated` / `not_violated` on disk | Paragraphs per case min / p50 / p90 / p99 / max |
+|---|---|---|---|---|---|---|---|
+| train | 9,000 | 180,000 | 10,640 / 79,360 | 13,165 / 76,835 | 72,000 | 9,639 / 62,361 | 1 / 17 / 48 / 105 / 558 |
+| val (official validation) | 1,000 | 20,000 | 1,060 / 8,940 | 1,391 / 8,609 | 8,000 | 931 / 7,069 | 1 / 19 / 48 / 93 / 256 |
+| benchmark (official test) | 1,000 | 20,000 | 1,090 / 8,910 | 1,435 / 8,565 | 10,000 (2,000 `unseen_q`) | 1,090 / 8,910 | 5 / 18 / 49 / 147 / 259 |
+
+| Length (Gemma 3 tokens) | n | min | p50 | p90 | p95 | p99 | max | > 16k |
+|---|---|---|---|---|---|---|---|---|
+| case text, train | 9,000 | 116 | 1,413 | 4,980 | 7,073 | 13,217 | 49,078 | 47 (0.52%) |
+| case text, validation | 1,000 | 145 | 1,728 | 5,183 | 6,871 | 12,081 | 21,056 | 5 |
+| case text, test | 1,000 | 171 | 1,923 | 5,769 | 7,667 | 12,542 | 22,519 | 2 |
+| rendered prompt, train (one question per case) | 9,000 | 387 | 1,766 | 5,505 | 7,698 | 13,961 | 53,132 | 59 |
+| rendered prompt, val | 1,000 | 406 | 2,076 | 5,754 | 7,484 | 13,097 | 22,982 | 7 |
+| rendered prompt, benchmark | 1,000 | 452 | 2,284 | 6,264 | 8,159 | 13,821 | 23,696 | 3 |
+| target JSON | all | 15 | 17 | 17 | 17 | 17 | 17 | 0 |
+
+Labels per case (task A, train): none 914 (10%), one 5,924, two 1,810, three 321, four or more 31; task B: none 134 (1.5%), one 5,599, two 2,495, three 596, four or more 176. Article frequencies in task A train, LexGLUE order (2, 3, 5, 6, 8, 9, 10, 11, 14, P1-1): 505, 1,349, 1,368, 4,704, 710, 41, 291, 110, 141, 1,421; Article 6 is in 52% of cases and Article 9 in 0.5%, so the per-article macro-F1 on the rare articles will be noisy. **The distribution is unimodal and right-skewed**: 64% of train cases are under 2k tokens, 5% above 8k. Known quality problems: the texts are the Court's facts sections only, so the model never sees the law section that states the outcome, which is the intended difficulty; a 1-paragraph minimum means a few cases are near-empty stubs (min 116 tokens) and are kept as the dataset ships them; task B is almost never empty and is closer to reading than judgement, so task A is the primary.
+
+**Examples** (test case 0, task A, verbatim; truncated):
+
+1. `text: 5. The applicant is a journalist for DN.no, a Norwegian Internet-based version of the newspaper Dagens Næringsliv (“DN”), published by the company DN Nye ...` — Q: *Did the Court find a violation of Article 2 (right to life) in this case?* → **not_violated** (the case's label set is `10`).
 
 Keep this file current when a dataset is added, removed, or re-scoped.

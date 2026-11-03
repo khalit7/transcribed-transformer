@@ -1,0 +1,81 @@
+Below are the opening and closing turns of a podcast episode, transcribed with automatic speaker diarisation. The speaker tags are SPEAKER_00, SPEAKER_01, SPEAKER_02.
+
+Which tag is the HOST: the person who runs the show, introduces the episode and any guests, asks the questions, reads sponsor messages, and closes? If there are co-hosts, name the one who does most of the running. If no tag can be identified as the host, answer null.
+
+TRANSCRIPT
+SPEAKER_00: turn 0
+SPEAKER_01: turn 1
+SPEAKER_02: turn 2
+SPEAKER_00: turn 3
+SPEAKER_01: turn 4
+SPEAKER_02: turn 5
+SPEAKER_00: turn 6
+SPEAKER_01: turn 7
+SPEAKER_02: turn 8
+SPEAKER_00: turn 9
+SPEAKER_01: turn 10
+SPEAKER_02: turn 11
+SPEAKER_00: turn 12
+SPEAKER_01: turn 13
+SPEAKER_02: turn 14
+SPEAKER_00: turn 15
+SPEAKER_01: turn 16
+SPEAKER_02: turn 17
+SPEAKER_00: turn 18
+SPEAKER_01: turn 19
+SPEAKER_02: turn 20
+SPEAKER_00: turn 21
+SPEAKER_01: turn 22
+SPEAKER_02: turn 23
+SPEAKER_00: turn 24
+SPEAKER_01: turn 25
+SPEAKER_02: turn 26
+SPEAKER_00: turn 27
+SPEAKER_01: turn 28
+SPEAKER_02: turn 29
+SPEAKER_00: turn 30
+SPEAKER_01: turn 31
+SPEAKER_02: turn 32
+SPEAKER_00: turn 33
+SPEAKER_01: turn 34
+SPEAKER_02: turn 35
+SPEAKER_00: turn 36
+SPEAKER_01: turn 37
+SPEAKER_02: turn 38
+SPEAKER_00: turn 39
+SPEAKER_01: turn 40
+SPEAKER_02: turn 41
+SPEAKER_00: turn 42
+SPEAKER_01: turn 43
+SPEAKER_02: turn 44
+SPEAKER_00: turn 45
+SPEAKER_01: turn 46
+SPEAKER_02: turn 47
+SPEAKER_00: turn 48
+SPEAKER_01: turn 49
+SPEAKER_02: turn 50
+SPEAKER_00: turn 51
+SPEAKER_01: turn 52
+SPEAKER_02: turn 53
+SPEAKER_00: turn 54
+SPEAKER_01: turn 55
+SPEAKER_02: turn 56
+SPEAKER_00: turn 57
+SPEAKER_01: turn 58
+SPEAKER_02: turn 59
+...: [middle of the episode omitted]
+SPEAKER_00: turn 288
+SPEAKER_01: turn 289
+SPEAKER_02: turn 290
+SPEAKER_00: turn 291
+SPEAKER_01: turn 292
+SPEAKER_02: turn 293
+SPEAKER_00: turn 294
+SPEAKER_01: turn 295
+SPEAKER_02: turn 296
+SPEAKER_00: turn 297
+SPEAKER_01: turn 298
+SPEAKER_02: turn 299
+
+Respond with a single JSON object and nothing else:
+{"host": "<one of ['SPEAKER_00', 'SPEAKER_01', 'SPEAKER_02']> or null", "confidence": <0-1>, "reason": "<one sentence>"}

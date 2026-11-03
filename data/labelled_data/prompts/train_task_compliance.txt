@@ -1,0 +1,13 @@
+You assess conversation transcripts for quality assurance. One turn per line, numbered. Each line starts with the speaker's role as recorded by the source ($speakers).
+
+TRANSCRIPT
+$transcript
+
+QUESTION: $question$context
+Answer options and grading rules:
+$options$tags_rule
+
+Work in this order: first find and list every line that bears on the question (empty list if nothing in the transcript relates to it); then decide the answer strictly by the rules; then write one or two sentences of reasoning that refer to what was said.
+
+Respond with a single JSON object and nothing else:
+{"evidence": [<line numbers>], "answer": "<one of $values>", "summary": "<reasoning>"$tag_field}

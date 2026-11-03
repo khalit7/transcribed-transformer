@@ -205,3 +205,204 @@ def test_assign_routes_post_freeze_podcast_episodes_by_their_podcast():
     assert assign(rec("sporc-new3", "Val Show"), splits) == "val"
     assert assign(rec("sporc-new4", "Fresh Show"), splits) == "train"
     assert assign({"id": "tm-new::gen-1", "dataset": "taskmaster", "question": {"id": "gen-1"}, "meta": {"subset": "x"}}, splits) == "train"
+
+
+def test_transfer_questions_bring_their_own_vocabulary_but_compliance_questions_do_not():
+    q = Question(id="t", family="transfer", text="?", dataset_allow_list=["ecthr"],
+                 options=[{"value": "A", "criteria": "a"}, {"value": "B", "criteria": "b"}])
+    assert q.values == ["A", "B"]
+    with pytest.raises(ValueError):
+        Question(id="t", family="transfer", text="?", dataset_allow_list=["ecthr"], options=[{"value": "A", "criteria": "a"}])
+    with pytest.raises(ValueError):
+        Question(id="x", family="general_qa", text="?", dataset_allow_list=["apptek"],
+                 options=[{"value": "pass", "criteria": "a"}, {"value": "fail", "criteria": "b"},
+                          {"value": "violated", "criteria": "c"}])
+
+
+def test_labelled_record_rejects_an_answer_outside_its_options():
+    from src.synthesis.schema import Generation, LabelledRecord
+    c = _case()
+    q = Question(id="q", family="general_qa", text="?", dataset_allow_list=["apptek"],
+                 options=[{"value": "pass", "criteria": "a"}, {"value": "fail", "criteria": "b"}])
+    g = Generation(name="t:m", labelled_variant="clean", cost_usd=0.0, timestamp="t")
+    LabelledRecord(id="t-1::q", dataset="apptek", source_id="s", track="track-p", question=q, transcript=c.transcript,
+                   label=Label(answer="pass", evidence=[], summary=""), generation_info=g)
+    with pytest.raises(ValueError):
+        LabelledRecord(id="t-1::q", dataset="apptek", source_id="s", track="track-p", question=q, transcript=c.transcript,
+                       label=Label(answer="NA", evidence=[], summary=""), generation_info=g)
+
+
+def test_claude_command_default_is_unchanged_and_lean_is_lean(monkeypatch):
+    from src.synthesis import llm
+    monkeypatch.setattr(llm, "_claude_env", {"CLAUDE_CONFIG_DIR": "/x"})
+    cmd, env = llm.claude_command("opus")
+    assert cmd == ["claude", "-p", "--model", "opus", "--output-format", "json"] and env == {"CLAUDE_CONFIG_DIR": "/x"}
+    cmd, env = llm.claude_command("opus", "Be brief.")
+    assert cmd[:6] == ["claude", "-p", "--model", "opus", "--output-format", "json"]
+    assert cmd[6:] == ["--tools", "", "--system-prompt", "Be brief."]
+    assert env == {"CLAUDE_CONFIG_DIR": "/x", "DISABLE_PROMPT_CACHING": "1"}
+
+
+def test_system_prompt_is_refused_off_the_claude_backend():
+    from src.synthesis import llm
+    try:
+        llm.ask_json_full("p", "ollama:x", system="s")
+    except llm.LLMError as e:
+        assert "claude backend" in str(e)
+    else:
+        raise AssertionError("expected LLMError")
+
+
+def test_the_clis_own_limit_envelope_is_waited_out(monkeypatch):
+    """The refusal as `claude -p` prints it in 2026 (captured from the pilot's log), whatever the exit code."""
+    import json
+    import types
+
+    from src.synthesis import llm
+
+    envelope = {"type": "result", "subtype": "success", "is_error": True, "api_error_status": 429,
+                "api_error_origin": "first_party", "api_error": "usage_limit_reached",
+                "result": "You've hit your 5-hour limit · resets 3:40am (Europe/London)", "total_cost_usd": 0}
+    for code in (0, 1):
+        monkeypatch.setattr(llm.subprocess, "run", lambda *a, code=code, **k: types.SimpleNamespace(
+            returncode=code, stdout=json.dumps(envelope), stderr=""))
+        try:
+            llm._claude("p", "opus", 5, system="s")
+        except llm.LLMLimit as e:
+            assert e.retry_after is not None and 0 <= e.retry_after <= 86400
+        else:
+            raise AssertionError("expected LLMLimit")
+    for text in ("You've hit your weekly limit · resets Nov 5, 3pm", "You've hit your Opus limit · resets 3pm"):
+        assert llm._LIMIT.search(text) and llm._reset_after(text) is not None
+
+
+def test_a_dated_reset_is_read_as_that_day():
+    from src.synthesis import llm
+    now = llm.time.localtime(llm.time.time() + 3 * 86400)
+    mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][now.tm_mon - 1]
+    secs = llm._reset_after(f"resets {mon} {now.tm_mday}, 3pm")
+    assert secs is not None and 1.5 * 86400 < secs < 4.5 * 86400
+
+
+def test_a_malformed_model_reply_is_a_retry_not_a_limit(monkeypatch):
+    """A long reply that fails to parse (its evidence may hold line 429, its summaries 'capacity') must not be waited
+    out as a limit; a lean reply with stray text around the object still parses."""
+    import json
+    import types
+
+    from src.synthesis import llm
+
+    bad = '{"q1": {"evidence": [429, 529], "answer": "x", "summary": "the venue was at capacity"' + " pad" * 400
+    monkeypatch.setattr(llm.subprocess, "run", lambda *a, **k: types.SimpleNamespace(
+        returncode=0, stdout=json.dumps({"result": bad, "total_cost_usd": 0.3}), stderr=""))
+    try:
+        llm._claude("p", "opus", 5, system="s")
+    except llm.LLMLimit as e:
+        raise AssertionError("a model reply was read as a limit") from e
+    except llm.LLMError as e:
+        assert e.cost == 0.3
+    good = 'Here are the answers:\n{"q1": {"answer": "x"}}\nDone.'
+    monkeypatch.setattr(llm.subprocess, "run", lambda *a, **k: types.SimpleNamespace(
+        returncode=0, stdout=json.dumps({"result": good, "total_cost_usd": 0.3}), stderr=""))
+    assert llm._claude("p", "opus", 5, system="s")[0] == {"q1": {"answer": "x"}}
+    try:  # the default route keeps its strict parse
+        llm._claude("p", "opus", 5)
+    except llm.LLMError:
+        pass
+    else:
+        raise AssertionError("default route should not loosen its parse")
+
+
+def test_a_weekly_limit_is_waited_out_until_its_reset(monkeypatch):
+    """A reset days away is slept until in full (not capped at the 6 h backoff budget), then the call succeeds."""
+    import json
+    import types
+
+    from src.synthesis import llm
+
+    calls = {"n": 0}
+
+    def fake_run(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return types.SimpleNamespace(returncode=1, stderr="", stdout=json.dumps(
+                {"is_error": True, "api_error_status": 429, "api_error": "usage_limit_reached",
+                 "result": "You've hit your weekly limit · resets Nov 5, 3pm"}))
+        return types.SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"result": '{"a": 1}', "total_cost_usd": 0.1}))
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(llm.subprocess, "run", fake_run)
+    monkeypatch.setattr(llm.time, "sleep", sleeps.append)
+    monkeypatch.setattr(llm, "_reset_after", lambda msg: 3 * 86400.0)
+    assert llm.ask_json_full("p", "claude:opus", system="s")[0] == {"a": 1}
+    assert len(sleeps) == 1 and sleeps[0] >= 3 * 86400
+
+
+def test_a_reset_just_past_is_retried_soon_not_tomorrow():
+    from src.synthesis import llm
+    t = llm.time.localtime(llm.time.time() - 600)  # ten minutes ago
+    if t.tm_mday != llm.time.localtime().tm_mday:  # just after midnight "ten minutes ago" is yesterday's clock time
+        return
+    h = t.tm_hour % 12 or 12
+    secs = llm._reset_after(f"resets {h}:{t.tm_min:02d}{'pm' if t.tm_hour >= 12 else 'am'}")
+    assert secs == 60.0
+
+
+def test_short_fenced_or_prefixed_replies_and_usage_counts_are_not_limits(monkeypatch):
+    import json
+    import types
+
+    from src.synthesis import llm
+
+    for result in ('```json\n{"answer": "pass", "summary": "in her capacity as agent"', 'Sure: {"answer": "pass", "evidence": [429]'):
+        monkeypatch.setattr(llm.subprocess, "run", lambda *a, r=result, **k: types.SimpleNamespace(
+            returncode=0, stdout=json.dumps({"result": r, "total_cost_usd": 0.01}), stderr=""))
+        try:
+            llm._claude("p", "sonnet", 5)
+        except llm.LLMLimit as e:
+            raise AssertionError(f"read as a limit: {result}") from e
+        except llm.LLMError:
+            pass
+    monkeypatch.setattr(llm.subprocess, "run", lambda *a, **k: types.SimpleNamespace(
+        returncode=1, stderr="", stdout=json.dumps({"is_error": True, "api_error": "max_output_tokens", "result": "",
+                                                    "usage": {"output_tokens": 529}, "total_cost_usd": 0.2})))
+    try:
+        llm._claude("p", "opus", 5, system="s")
+    except llm.LLMLimit as e:
+        raise AssertionError("a usage count was read as a limit") from e
+    except llm.LLMError as e:
+        assert e.cost == 0.2
+
+
+def test_prose_replies_and_empty_error_envelopes_are_retries_not_limits(monkeypatch):
+    import json
+    import types
+
+    from src.synthesis import llm
+
+    cases = [(0, {"result": "I cannot do this in my capacity as a labeller; try again later.", "total_cost_usd": 0.01}),
+             (0, {"is_error": True, "result": "", "usage": {"output_tokens": 529}, "total_cost_usd": 0.01})]
+    for code, env in cases:
+        monkeypatch.setattr(llm.subprocess, "run", lambda *a, c=code, e=env, **k: types.SimpleNamespace(
+            returncode=c, stdout=json.dumps(e), stderr=""))
+        try:
+            llm._claude("p", "opus", 5, system="s")
+        except llm.LLMLimit as e:
+            raise AssertionError(f"read as a limit: {env}") from e
+        except llm.LLMError:
+            pass
+    monkeypatch.setattr(llm.subprocess, "run", lambda *a, **k: types.SimpleNamespace(
+        returncode=0, stdout=json.dumps({"result": "Claude AI usage limit reached", "total_cost_usd": 0}), stderr=""))
+    try:
+        llm._claude("p", "opus", 5)
+    except llm.LLMLimit:
+        pass
+    else:
+        raise AssertionError("the CLI's own limit notice must still be a limit")
+
+
+def test_a_past_or_new_year_dated_reset_is_a_short_retry():
+    from src.synthesis import llm
+    past = llm.time.localtime(llm.time.time() - 2 * 86400)
+    mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][past.tm_mon - 1]
+    assert llm._reset_after(f"resets {mon} {past.tm_mday}, 3pm") == 60.0

@@ -4,10 +4,22 @@ data/**
 !data/DATASHEET.md
 !data/SURVEYSHEET.md
 !data/SYNTHSHEET.md
-# Labelled data: nothing under data/labelled_data/ is tracked. The question
+# Labelled data: nothing under data/labelled_data/ or data/labelled_data_v2/ is
+# tracked except the prompt templates (prompts/ in each: every prompt a model
+# sees, loaded by src/prompts.py and hashed by the review gate). The question
 # bank's source of truth is src/synthesis/question_bank.py (tracked); the JSONL
 # files mix licence tracks (NC text from SPoRC cannot be redistributed), and a
 # releasable Track P copy is produced by `python -m src.synthesis.export --track p`.
+!data/labelled_data/
+data/labelled_data/*
+!data/labelled_data/prompts/
+!data/labelled_data/prompts/*.txt
+!data/labelled_data/prompts/*.md
+!data/labelled_data_v2/
+data/labelled_data_v2/*
+!data/labelled_data_v2/prompts/
+!data/labelled_data_v2/prompts/*.txt
+!data/labelled_data_v2/prompts/*.md
 
 # Model weights and checkpoints
 checkpoints/

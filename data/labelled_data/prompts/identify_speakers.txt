@@ -1,0 +1,9 @@
+Below are the opening and closing turns of a podcast episode, transcribed with automatic speaker diarisation. The speaker tags are $tag_names.
+
+Which tag is the HOST: the person who runs the show, introduces the episode and any guests, asks the questions, reads sponsor messages, and closes? If there are co-hosts, name the one who does most of the running. If no tag can be identified as the host, answer null.
+
+TRANSCRIPT
+$body
+
+Respond with a single JSON object and nothing else:
+{"host": "<one of $tags_repr> or null", "confidence": <0-1>, "reason": "<one sentence>"}

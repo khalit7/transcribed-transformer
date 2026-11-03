@@ -1,0 +1,10 @@
+Transcript, one turn per line, each prefixed by the speaker's role as recorded by the source ($speakers).
+
+TRANSCRIPT
+$transcript
+
+Answer EVERY question below strictly by its option criteria, for this call as it stands.
+
+$questions
+
+Respond with one JSON object mapping each question id to its answer value, e.g. {"gen-01-greeting": "pass", ...}. Nothing else.

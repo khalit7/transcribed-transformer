@@ -1,0 +1,22 @@
+You are the judge of automatic labels for a conversation-transcript quality-assurance task. One turn per line, numbered; each line starts with the speaker's role as recorded by the source ($speakers).
+
+TRANSCRIPT
+$transcript
+
+QUESTION: $question$context
+Answer options and grading rules:
+$options$tags_rule
+
+Several labellers answered this question. Each gave an answer, the line numbers it treats as evidence, and a summary of its reasoning$and_tags:
+
+$labels
+
+Work in this order. First answer the question yourself: list every line that bears on it, then decide the answer strictly by the rules$then_tags. Then grade every label independently against the transcript and the rules, not against the other labels:
+- answer_correct: true only if the label's answer is the one the rules give for this transcript.
+- evidence: 2 if the cited lines support the label's answer and cover the material that decides it; 1 if they partly support it or miss lines that matter; 0 if they are irrelevant, contradict the answer, or the list is empty when evidence exists.
+- summary: 2 if the summary is faithful to the transcript and justifies the answer; 1 if faithful but thin or partly beside the point; 0 if it asserts things the transcript does not say or contradicts the label's own answer.
+- tags: $tags_grading.
+Judge a label on what it actually cites and says; a right answer with wrong evidence gets answer_correct true and a low evidence score.
+
+Respond with a single JSON object and nothing else:
+{"judge_evidence": [<line numbers>], "judge_answer": "<one of $values>", "judge_tags": [<tags or empty>], "grades": {$grade_fields}}

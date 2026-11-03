@@ -21,32 +21,41 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from src import prompts
 from src.synthesis.label import numbered
 from src.synthesis.schema import Label, Question
+from src.synthesis_v2 import numbered as numbered_v2
 
 SEP = "\n\n"
 
 
+# The prompt the trained models see, one template file per task family (data/labelled_data*/prompts/, see src/prompts.py):
+# a written document for the transfer task (ECtHR: paragraphs, no speaker roles), a podcast episode for the v2 bank, and
+# a quality-assurance review of a call for the compliance families.
+PROMPT_TEMPLATES = {"transfer": prompts.V1 / "train_task_transfer.txt", "podcast": prompts.V2 / "train_task.txt"}
+PROMPT_DEFAULT = prompts.V1 / "train_task_compliance.txt"
+# How the transcript's lines are numbered, per family: v2's podcast data uses `<n>. <speaker>:<utterance>` (D76), the
+# rest v1's `<n>: <speaker>: <utterance>`.
+NUMBERING = {"podcast": numbered_v2}
+
+
+def prompt_template(family: str) -> Path:
+    return PROMPT_TEMPLATES.get(family, PROMPT_DEFAULT)
+
+
 def task_prompt(lines: list[str], speakers: list[str], q: Question) -> str:
-    role_txt = f"Each line starts with the speaker's role as recorded by the source ({', '.join(speakers)})."
+    if q.family == "podcast":  # the v2 bank stores its shared definitions once; the prompt opens the context with them
+        from src.synthesis_v2.question_bank import with_definitions
+
+        q = with_definitions(q)
     opts = "\n".join(f"- {o.value}: {o.criteria}" for o in q.options)
     ctx = f"\nContext: {q.description}" if q.description else ""
     tag_txt = ("\nThe answer must also carry tags chosen only from this list (empty list if none applies): "
                + "; ".join(q.tags)) if q.tags else ""
     tag_field = ', "tags": ["<tag>", ...]' if q.tags else ""
-    return f"""You assess conversation transcripts for quality assurance. One turn per line, numbered. {role_txt}
-
-TRANSCRIPT
-{numbered(lines)}
-
-QUESTION: {q.text}{ctx}
-Answer options and grading rules:
-{opts}{tag_txt}
-
-Work in this order: first find and list every line that bears on the question (empty list if nothing in the transcript relates to it); then decide the answer strictly by the rules; then write one or two sentences of reasoning that refer to what was said.
-
-Respond with a single JSON object and nothing else:
-{{"evidence": [<line numbers>], "answer": "<one of {q.values}>", "summary": "<reasoning>"{tag_field}}}"""
+    transcript = NUMBERING.get(q.family, numbered)(lines)
+    return prompts.render(prompt_template(q.family), speakers=", ".join(speakers), transcript=transcript, question=q.text,
+                          context=ctx, options=opts, tags_rule=tag_txt, values=q.values, tag_field=tag_field)
 
 
 def target_text(label: Label, q: Question) -> str:
@@ -56,11 +65,39 @@ def target_text(label: Label, q: Question) -> str:
     return json.dumps(out, ensure_ascii=False, separators=(", ", ": "))
 
 
-def record_prompt(r: dict, variant: str) -> str:
-    """Prompt for a ledger/split record rendered from one transcript variant."""
+def record_lines(r: dict, variant: str) -> list[str]:
     t = r["transcript"]
-    lines = next((v["lines"] for v in t["variants"] if v["kind"] == variant), t["variants"][0]["lines"])
-    return task_prompt(lines, t["speakers"], Question.model_validate(r["question"]))
+    return next((v["lines"] for v in t["variants"] if v["kind"] == variant), t["variants"][0]["lines"])
+
+
+def record_prompt(r: dict, variant: str, n_lines: int | None = None) -> str:
+    """Prompt for a ledger/split record rendered from one transcript variant; `n_lines` keeps only the first n lines."""
+    lines = record_lines(r, variant)
+    if n_lines is not None:
+        lines = lines[:n_lines]
+    return task_prompt(lines, r["transcript"]["speakers"], Question.model_validate(r["question"]))
+
+
+def fit_prompt(r: dict, variant: str, tokenizer, budget: int) -> tuple[str, int]:
+    """The record's prompt cut to `budget` tokens (counted as the trainer counts them, with the tokenizer's own start
+    token) by dropping trailing document lines, so a document longer than the context keeps its head. Returns the prompt
+    and the number of lines kept; 0 lines kept means even the first line does not fit and the caller drops the record.
+    Used only where a split asks for it (`data.overlong: truncate`; the transfer datasets, where no evidence refers to
+    line numbers): on the compliance data an over-long record is dropped, never cut, because its evidence lines could
+    fall in the cut part."""
+    n_tok = lambda text: len(tokenizer(text)["input_ids"])
+    full = record_prompt(r, variant)
+    n = len(record_lines(r, variant))
+    if n_tok(full) <= budget:
+        return full, n
+    lo, hi = 0, n  # invariant: lo lines fit (0 always "fits" as the empty document), hi lines do not
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if n_tok(record_prompt(r, variant, mid)) <= budget:
+            lo = mid
+        else:
+            hi = mid
+    return record_prompt(r, variant, lo), lo
 
 
 @dataclass
@@ -87,32 +124,44 @@ def _variants_of(r: dict, requested: list[str]) -> list[str]:
 
 
 def build_examples(path: Path, tokenizer, variants: list[str], max_seq_len: int,
-                   cache_dir: Path | None = None, limit: int | None = None) -> tuple[list[Example], dict]:
+                   cache_dir: Path | None = None, limit: int | None = None,
+                   overlong: str = "drop") -> tuple[list[Example], dict]:
     """Tokenised examples for one side of the split, every record whatever its licence track (training is
     research-only; the tracks govern the labelled-data release, not what a model may see). Cached by
     content as one flat int32 tensor plus offsets; prompts are tokenised in chunks so the text never
-    sits in memory all at once."""
-    key = hashlib.sha1(f"{path}|{path.stat().st_mtime_ns}|{tokenizer.name_or_path}|{variants}|{max_seq_len}|{limit}"
+    sits in memory all at once. A record whose prompt, target and eos exceed max_seq_len is dropped
+    (`overlong="drop"`, the compliance data) or has its document cut to fit (`"truncate"`, see fit_prompt)."""
+    templates = prompts.digest(PROMPT_DEFAULT, *PROMPT_TEMPLATES.values())  # a changed prompt file invalidates the cache
+    key = hashlib.sha1(f"{path}|{path.stat().st_mtime_ns}|{tokenizer.name_or_path}|{variants}|{max_seq_len}|{limit}|{overlong}|{templates}"
                        .encode()).hexdigest()[:16]
     cache = (cache_dir / f"{path.stem}-{key}.pt") if cache_dir else None
     if cache and cache.exists():
         return _load_cache(cache)
     eos = tokenizer.eos_token_id
-    pending: list[tuple[str, str, str, str]] = []  # (id, variant, prompt, target)
+    pending: list[tuple[str, str, str, str, dict]] = []  # (id, variant, prompt, target, record)
     examples: list[Example] = []
-    dropped = 0
+    dropped = truncated = 0
+    sep_len = len(tokenizer(SEP, add_special_tokens=False)["input_ids"])
 
     def flush() -> None:
-        nonlocal dropped
+        nonlocal dropped, truncated
         if not pending:
             return
         # the prompt opens with the tokenizer's own start token when it has one (<bos> for Gemma; Qwen adds nothing)
-        enc_p = tokenizer([p for _, _, p, _ in pending])["input_ids"]
-        enc_t = tokenizer([t for _, _, _, t in pending], add_special_tokens=False)["input_ids"]
-        for (id_, v, _, _), ip, it in zip(pending, enc_p, enc_t):
+        enc_p = tokenizer([p for _, _, p, _, _ in pending])["input_ids"]
+        enc_t = tokenizer([t for _, _, _, t, _ in pending], add_special_tokens=False)["input_ids"]
+        for (id_, v, _, _, r), ip, it in zip(pending, enc_p, enc_t):
             if len(ip) + len(it) + 1 > max_seq_len:
-                dropped += 1
-                continue
+                if overlong != "truncate":
+                    dropped += 1
+                    continue
+                cut, kept = fit_prompt(r, v, tokenizer, max_seq_len - len(it) - 1 - sep_len)
+                if kept == 0:
+                    dropped += 1
+                    continue
+                ip = tokenizer(cut + SEP)["input_ids"]
+                assert len(ip) + len(it) + 1 <= max_seq_len, (id_, len(ip), len(it))
+                truncated += 1
             examples.append(Example(id=id_, variant=v, input_ids=np.asarray(ip + it + [eos], dtype=np.int32), n_prompt=len(ip)))
         pending.clear()
 
@@ -122,14 +171,14 @@ def build_examples(path: Path, tokenizer, variants: list[str], max_seq_len: int,
         q = Question.model_validate(r["question"])
         tgt = target_text(Label.model_validate(r["label"]), q)
         for v in _variants_of(r, variants):
-            pending.append((r["id"], v, record_prompt(r, v) + SEP, tgt))
+            pending.append((r["id"], v, record_prompt(r, v) + SEP, tgt, r))
             n_seen += 1
         if len(pending) >= 1000:
             flush()
         if limit and n_seen >= limit:
             break
     flush()
-    stats = {"examples": len(examples), "dropped_too_long": dropped,
+    stats = {"examples": len(examples), "dropped_too_long": dropped, "truncated": truncated,
              "prompt_tokens": sum(e.n_prompt for e in examples), "target_tokens": sum(e.n_target for e in examples),
              "max_len": max((len(e.input_ids) for e in examples), default=0)}
     if cache:
