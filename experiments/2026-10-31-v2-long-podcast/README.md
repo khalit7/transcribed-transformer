@@ -1,6 +1,6 @@
 # Labelled data v2: long podcast episodes, and the capacity grid on them
 
-**Status: bank approved and production labelling of all 6,000 episodes under way (2026-11-02); the grid is not yet
+**Status: bank approved and production labelling of all 6,000 episodes complete (264,000 labels, 2026-11-05); the grid is not yet
 pre-registered. Everything below the Pilot section was written before the pilot ran; the pilot's measured results are
 filled in from the files it writes, never from memory.**
 
