@@ -54,7 +54,7 @@ gen_cmd() {  # $1 model_dir $2 arch $3 base $4 encoder_base $5 split $6 out $7 m
         stitched)
             local bt=160000; [[ "$3" == *4b* || "$4" == *4b* ]] && bt=40000
             GEN_CMD="uv run --no-sync python -m src.train.generate $1 $common --backend stitched --batch-tokens $bt" ;;
-        soft)  # E5: the soft-token stitch into a Gemma 3 decoder; base is the adapted SoftStitched export, its name carries the encoder size
+        soft)  # E5-soft-tokens: the soft-token stitch into a Gemma 3 decoder; base is the adapted SoftStitched export, its name carries the encoder size
             local bt=160000; [[ "$3" == *4b* || "$4" == *4b* ]] && bt=40000
             GEN_CMD="uv run --no-sync python -m src.train.generate $1 $common --backend soft --batch-tokens $bt" ;;
         *) log "no generation backend for arch $2 ($1); stopping"; exit 1 ;;

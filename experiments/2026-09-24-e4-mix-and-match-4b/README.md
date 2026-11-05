@@ -68,4 +68,4 @@ Half confirmed, half disconfirmed, and the disconfirmed half changes the reading
 
 - The 4B encoder + 1B decoder (`configs/e4/mm-4b-enc-1b-dec-80gb.yaml`) on rented hardware, the exact recipe without frozen embeddings: whether the encoder's gains stack on a decoder that has crossed its threshold.
 - A seed replicate of the 4B encoder + 270M decoder before the "level with the 4B decoder" claim goes anywhere.
-- The E5 soft-token arm (`experiments/2026-09-25-e5-soft-tokens-t5gemma2-270m-enc-gemma3-1b/`) asks the same-decoder question the grid cannot.
+- The E5-soft-tokens soft-token arm (`experiments/2026-09-25-e5-soft-tokens-t5gemma2-270m-enc-gemma3-1b/`) asks the same-decoder question the grid cannot.

@@ -399,7 +399,7 @@ than spending the same parameters on a bigger decoder, and does the answer depen
 results put the capacity in the encoder; v2 tests that on one corpus, one bank and one labeller across four lengths.
 
 - **H1 (encoder in front of the same decoder).** At every length band, each encoder arm beats its own decoder-only
-  control: E5++ arms beat E1++, and E4 arms beat E1. Read first on E5++ against E1++, the clean comparison: the decoder
+  control: E5-soft-tokens++ arms beat E1++, and E4 arms beat E1. Read first on E5-soft-tokens++ against E1++, the clean comparison: the decoder
   is the same Gemma 3 checkpoint, after the same adaptation stage. E4 against E1 also changes the decoder's weights
   (T5Gemma 2's decoder is not Gemma 3's), so it is supporting evidence.
 - **H2 (encoder size).** Within a decoder size, a larger encoder scores higher: 4b > 1b > 270m encoders in front of the
@@ -417,40 +417,88 @@ results put the capacity in the encoder; v2 tests that on one corpus, one bank a
 | 3 | `e1-gemma3-1b-pt-v2` | E1 | — | Gemma 3 1B | (control, H3) |
 | 4 | `e1-gemma3-4b-pt-v2` | E1 | — | Gemma 3 4B | (control, H3) |
 | 5 | `e4-t5gemma2-270m-270m-v2` | E4 | 270m | T5Gemma 2 270m | #1 |
-| 6 | `e5pp-t5gemma2-270m-enc-gemma3-270m-v2` | E5++ | 270m | Gemma 3 270M | #2 |
+| 6 | `e5-soft-tokens-pp-t5gemma2-270m-enc-gemma3-270m-v2` | E5-soft-tokens++ | 270m | Gemma 3 270M | #2 |
 | 7 | `e4mm-1b-enc-270m-dec-v2` | E4 | 1b | T5Gemma 2 270m | #1, #3 |
-| 8 | `e5pp-t5gemma2-1b-enc-gemma3-270m-v2` | E5++ | 1b | Gemma 3 270M | #2, #3 |
+| 8 | `e5-soft-tokens-pp-t5gemma2-1b-enc-gemma3-270m-v2` | E5-soft-tokens++ | 1b | Gemma 3 270M | #2, #3 |
 | 9 | `e4mm-4b-enc-270m-dec-v2` | E4 | 4b | T5Gemma 2 270m | #1, #4 |
-| 10 | `e5pp-t5gemma2-4b-enc-gemma3-270m-v2` | E5++ | 4b | Gemma 3 270M | #2, #4 |
+| 10 | `e5-soft-tokens-pp-t5gemma2-4b-enc-gemma3-270m-v2` | E5-soft-tokens++ | 4b | Gemma 3 270M | #2, #4 |
 | 11 | `e1pp-gemma3-1b-pt-v2` | E1++ | — | Gemma 3 1B, adapted | (control) |
 | 12 | `e4-t5gemma2-1b-1b-v2` | E4 | 1b | T5Gemma 2 1b | #3 |
 | 13 | `e4mm-270m-enc-1b-dec-v2` | E4 | 270m | T5Gemma 2 1b | #3 |
-| 14 | `e5pp-t5gemma2-270m-enc-gemma3-1b-v2` | E5++ | 270m | Gemma 3 1B | #11 |
-| 15 | `e5pp-t5gemma2-1b-enc-gemma3-1b-v2` | E5++ | 1b | Gemma 3 1B | #11 |
+| 14 | `e5-soft-tokens-pp-t5gemma2-270m-enc-gemma3-1b-v2` | E5-soft-tokens++ | 270m | Gemma 3 1B | #11 |
+| 15 | `e5-soft-tokens-pp-t5gemma2-1b-enc-gemma3-1b-v2` | E5-soft-tokens++ | 1b | Gemma 3 1B | #11 |
 | 16 | `e4mm-270m-enc-4b-dec-v2` | E4 | 270m | T5Gemma 2 4b | #4 |
 
-These are every combination that trains on two 32 GB cards. The native 4b-4b, the 4B E1++, and the E4 / E5++ arms that
+**Scope change (2026-11-05, before any of these arms trained).** The grid now runs the E1 and E4 arms only, in the
+order above without rows 2, 6, 8, 10, 11, 14 and 15: nine arms. The E1++ controls and the E5-soft-tokens++ arms are
+parked, to run later from the same generator, while a new experiment, E5-merged-attention (a T5Gemma 2 encoder read by
+a decoder-only Gemma 3 through T5Gemma 2's merged attention, the interface E4-mix-and-match uses), is built and piloted;
+its pilot is pre-registered separately before it runs. H1, H2 and H4 are read on E4 against E1 until the parked arms run,
+with the caveat above that E4 against E1 also changes the decoder's weights; H3 is unaffected.
+
+These are every combination that trains on two 32 GB cards. The native 4b-4b, the 4B E1++, and the E4 / E5-soft-tokens++ arms that
 pair a 4b encoder with the 1B decoder or a 1b encoder with the 4B decoder need 80 GB cards and are not in this grid.
-The E1++ / E5++ arms start from the existing adaptation-stage exports (no new adaptation); those read SPoRC text
+The E1++ / E5-soft-tokens++ arms start from the existing adaptation-stage exports (no new adaptation); those read SPoRC text
 during adaptation, which is why the split keeps every episode and show they read out of val and benchmark.
 
 ### Recipe and budget
 
 Each arm copies its compliance config's recipe and model block unchanged (`configs/v2/`, `scripts/make_v2_configs.py`;
-queue `scripts/queue_v2.sh`). Each training episode contributes 8 of its 32 trained questions, a seeded choice fixed
-per episode: 36,800 examples, one epoch of 1,150 steps of 32, 318.0M tokens (316.4M prompt, 1.6M answer; Gemma 3
-tokenizer, measured), longest example 15,626 tokens, none dropped for length. Val keeps all 6,400 pairs, of which the
+queue `scripts/queue_v2.sh`), except that the four E4-mix-and-match arms start from stitches refitted on v2 (below). Each training episode contributes 20 of its 32 trained questions, a seeded choice fixed
+per episode (raised from 8 after arm 1; see "Budget deviation" below): 92,000 examples, one epoch of 2,875 steps of 32,
+about as many examples and steps as the v1 compliance runs (91,502 examples, 2,858 steps), though about 3.2 times v1's
+tokens (250.1M) since v2 transcripts are longer. Measured at 20 (Gemma 3 tokenizer): 795.1M tokens (791.1M prompt,
+4.0M answer), longest example 15,646 tokens, none dropped for length; every trained question on 2,814 to 2,955 episodes.
+(At 8: 36,800 examples, 318.0M tokens.) Val keeps all 6,400 pairs, of which the
 trainer reads a fixed 512 for the val loss. Generation renders the training prompt, never cuts a transcript (the longest
 benchmark prompt is 15,428 tokens) and allows a 512-token answer (the longest in the data is 211).
 
-**Budget check on the first arm.** Arm 1 runs alone first. If its val loss at the last val point (step 1,150) is more
-than 2% below the one before it (step 920), the budget is not enough for the control and I raise it for every arm (16
-questions per episode, the same one epoch) before arm 2; otherwise the budget stands. An arm whose own val loss is
+**Budget check on the first arm.** Arm 1 runs alone first. If its val loss at the last val point is more than 2% below
+the one before it, the budget is not enough for the control and I raise it for every arm before arm 2; otherwise the
+budget stands. (As first written, at 8 questions with val points at steps 920 and 1,150 and a raise to 16; applied, and
+overridden, as "Budget deviation" below records. At 20 questions the val points are every 575 steps and the raise rule is
+replaced by my decision on arm 1's retrained result, written to the queue's budget file as the number of
+questions per episode; a different number than 20 would mean regenerating every config and retraining arm 1 again.) An arm whose own val loss is
 still falling by more than 2% over its last interval is reported with that flag, since its gap to a control may be
 undertraining.
 
+**Stitches refitted on v2 (2026-11-05, after arm 1, before any E4-mix-and-match arm trained).** Each mix-and-match arm
+starts from an affine stitch fitted by ridge regression from its donor encoder's final states onto the native encoder's
+(`src/train/fit_stitch.py`). The compliance fits used compliance prompts up to 8k tokens; I refitted all four on the v2
+training prompts, one per episode (so the held-out prompts sit on episodes the fit never saw), up to 16,384 tokens,
+with the same fit size (3.0M fit tokens, 0.30M held out) and ridge (0.01), written as `checkpoints/stitch/<pair>-v2.pt`.
+Explained variance on held-out tokens (each fit's own held-out set, and both stitches scored on the v2 fit's held-out
+set of 300,389 tokens from episodes neither fit saw):
+
+| stitch (donor encoder -> native encoder) | compliance fit, compliance held-out | compliance fit, v2 held-out | v2 fit, v2 held-out |
+|---|---|---|---|
+| 1b -> 270m | 0.644 | 0.542 | 0.612 |
+| 4b -> 270m | 0.621 | 0.506 | 0.583 |
+| 270m -> 1b | 0.476 | 0.392 | 0.472 |
+| 270m -> 4b | 0.435 | 0.318 | 0.401 |
+
+On v2 text the refitted stitch explains 0.07 to 0.08 more of the native encoder's variance than the compliance one, so
+the v2 arms start from the refit. The v2 figures are lower than the compliance fits' own, but that comparison does not
+show v2 is harder to map: the compliance fits were not one prompt per transcript (about 29 prompts per transcript), so
+their held-out tokens sit mostly on transcripts the fit saw, and corpus and length differ as well. The stitch is only the
+starting point and trains with the rest.
+
+Reproduction: each fit is `uv run python -m src.train.fit_stitch --source google/t5gemma-2-<donor> --target
+google/t5gemma-2-<native> --train data/labelled_data_v2/train.jsonl --one-per-transcript --max-len 16384 --out
+checkpoints/stitch/<pair>-v2.pt` (defaults otherwise: 3,000,000 fit tokens, ridge 0.01, seed 0); the middle column is
+`uv run python scripts/stitch_cross_ev.py <pair> google/t5gemma-2-<donor> google/t5gemma-2-<native>`. The stitch files
+are not in the repository; their SHA-256 prefixes are `cbd8ed6b` (1b -> 270m), `a06d6d4c` (4b -> 270m), `be59bcf7`
+(270m -> 1b) and `9adbf48f` (270m -> 4b), and the grid's queue hashes them with its review gate.
+
 ### Measures and how they are read
 
+- **Valid-output reading** (added 2026-11-05, before any arm trained at the final budget): every band and cell is also
+  reported on the format-valid outputs (`.../valid_only`: one JSON object, an answer among the options, a sorted valid
+  evidence list and a summary). An invalid output scores as wrong everywhere else, so a model that loops more often in
+  long episodes looks as if it reads them worse; the two readings together separate the two. Each arm is scored on its
+  own valid subset, so this reading compares answer quality where each model completed the format, not on identical
+  pairs; it is read beside each arm's format-valid rate, never alone. A hypothesis read on the headline is also stated on
+  this reading.
 - **Headline:** answer macro-F1 per length band, on the trained-question cell and on the held-out cell, each read
   against its control in the same band and against the band's own majority-answer floor
   (`band=<b>/cell=<c>/floor=majority_answer_in_band`; in-sample majorities, as the global floor). Also accuracy and
@@ -463,7 +511,7 @@ undertraining.
   the number of bands it holds in.
 - **H4** holds if an encoder arm's gap over its control at 12-16k exceeds its gap at 0-4k by at least 0.02, and the
   four bands are ordered the same way or within 0.02 of it.
-- **What would refute the compliance finding:** E5++ arms within 0.02 of E1++ in every band, or below it.
+- **What would refute the compliance finding:** E5-soft-tokens++ arms within 0.02 of E1++ in every band, or below it.
 
 ### Checks run before any arm trains, and their rules
 
@@ -481,6 +529,19 @@ undertraining.
   while at 0-4k it does not, I read that as the labeller under-reading the middle of long episodes, and state it beside
   every 12-16k number.
 
+**Budget deviation (2026-11-05).** Arm 1 ran first at 8 questions per episode (`e1-gemma3-270m-v2`, wandb
+tt-decoder `fgyupvvm`; 50 min training, 1,150 steps, 107k tokens/s; generation 9.4 min). Its val loss fell from 0.832 to
+0.822 over the last interval (step 920 to 1,150), 1.2%, so the pre-registered 2% rule read "keep". I raised the budget
+to 20 questions per episode anyway, overriding the rule, for three measured reasons: the cosine schedule ends at a tenth
+of the peak learning rate, so the flattening is partly the schedule; on the benchmark the model scored accuracy 0.443
+against the majority answer's 0.549 (macro-F1 0.328 against 0.217); and 6,088 of its 52,800 outputs (11.5%) ran to
+the 512-token cap, 5,886 of them enumerating line numbers as evidence without reaching an answer and 202 looping in the
+summary after one, rising with length (5%, 8%, 13%, 20% of outputs by band), which would make the length comparison measure looping as much as reading. 20 questions per
+episode gives about v1's number of examples and steps. Every arm, arm 1 included, trains at 20; the run at 8 is kept as
+a record (`checkpoints/_archive/e1-gemma3-270m-v2-q8/`, its wandb run tagged `superseded-q8`) and is not part of the
+grid; results tables filter on the `v2-q20` tag. The decision came after one
+control's result and before any encoder arm trained, so it cannot favour an architecture.
+
 **Revision before any arm trained (2026-11-05).** The rule as first written compared the best probe with the
 constant majority answer, by macro-F1. A check of the rule ran it on the frozen split and it flagged 138 of the 176
 (question, band) pairs. It could not tell a shortcut from an artefact: a constant answer's macro-F1 is capped near one
@@ -496,3 +557,31 @@ behaviour as much as the question. The model reads the same tags, so a flagged p
 without reading the content.
 
 Results: TBD.
+
+## Results
+
+Arms are added as they are scored. Headline gold is the Opus labeller's; every number below is from the run's
+`eval/benchmark/results.md` and its wandb run.
+
+**Arm 1, `e1-gemma3-270m-v2` at 20 questions per episode** (tt-decoder `rikhj1a8`; 2,875 steps; resumed once from
+step 692 after a GPU driver hang). Val loss 2.537 / 0.881 / 0.801 / 0.769 / 0.743 / 0.730 at steps 0 / 575 / 1,150 /
+1,725 / 2,300 / 2,875: still falling 1.7% over the last interval, under the 2% flag. On the benchmark (52,800 pairs),
+against the same model at 8 questions per episode and the majority answer:
+
+| | at 8 | at 20 | majority answer |
+|---|---|---|---|
+| format valid | 0.881 | 0.964 | |
+| accuracy | 0.443 | 0.580 | 0.549 |
+| macro-F1 | 0.328 | 0.394 | 0.217 |
+| evidence F1 | 0.145 | 0.302 | 0.260 |
+| outputs at the 512-token cap | 11.5% | 3.2% | |
+
+By band (0-4k / 4-8k / 8-12k / 12-16k) at 20: accuracy 0.675 / 0.591 / 0.540 / 0.516 against in-band majority floors
+0.652 / 0.581 / 0.531 / 0.534, macro-F1 0.322 / 0.375 / 0.402 / 0.397 against 0.144 / 0.224 / 0.305 / 0.316; capped
+outputs 1.3% / 1.8% / 3.6% / 6.0%. Trained questions: accuracy 0.621, macro-F1 0.441. Held-out questions: accuracy 0.473,
+macro-F1 0.247 (0.240 at 8), with accuracy under the in-band majority floor in every band (0.640 / 0.497 / 0.391 / 0.363
+against 0.714 / 0.565 / 0.502 / 0.502) and macro-F1 above it. On format-valid outputs only: trained 0.644 / 0.453,
+held-out 0.485 / 0.249 (accuracy / macro-F1). The extra budget mostly bought format and trained-question performance;
+held-out questions barely moved. I kept the
+budget at 20 for every arm.
+

@@ -1,5 +1,5 @@
 # E1++ on Gemma 3 270M: the E1 fine-tune (configs/e1/gemma3-270m.yaml, 0.446 / 0.315) started from the corpora-scale
-# continuation-adapted checkpoint (configs/adapt/continuation-corpora-gemma3-270m.yaml). The matched control of the three E5++ arms
+# continuation-adapted checkpoint (configs/adapt/continuation-corpora-gemma3-270m.yaml). The matched control of the three E5-soft-tokens++ arms
 # into the 270M decoder (D56): same adaptation data, cuts and budget, the prefix read as tokens.
 experiment: e1
 name: e1pp-gemma3-270m
@@ -23,4 +23,4 @@ val_every: 200
 checkpoint_minutes: 30
 keep_checkpoints: 1
 wandb_project: tt-decoder
-tags: [adapted, corpora, google/gemma-3-270m, full-params, control-e5pp-270m]
+tags: [adapted, corpora, google/gemma-3-270m, full-params, control-e5-soft-tokens-pp-270m]

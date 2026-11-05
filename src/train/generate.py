@@ -10,7 +10,7 @@ slow fallback inside the training environment, and --backend prefixlm is the E2 
 prefill with the prefix-LM mask, then ordinary cached decoding), also inside the training environment;
 --backend encdec is the E3 path (encoder once, cached decoding with cross-attention); --backend hf_encdec
 is a native Hugging Face encoder-decoder (T5Gemma 2) through the library's own generate; --backend hybrid,
-stitched and soft are the E6 decoder-only + encoder, E4-mix-and-match and E5 soft-token models (src/train/hybrid.py,
+stitched and soft are the E6 decoder-only + encoder, E4-mix-and-match and E5-soft-tokens soft-token models (src/train/hybrid.py,
 stitched.py, soft.py).
 """
 
@@ -85,7 +85,7 @@ def main() -> None:
     ap.add_argument("--max-model-len", type=int, default=32768)
     ap.add_argument("--tp", type=int, default=1)
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--backend", choices=["vllm", "hf", "prefixlm", "encdec", "hf_encdec", "hf_encdec_hybrid", "hybrid", "stitched", "soft"], default="vllm")
+    ap.add_argument("--backend", choices=["vllm", "hf", "prefixlm", "encdec", "hf_encdec", "hf_encdec_hybrid", "hybrid", "stitched", "soft", "merged"], default="vllm")
     ap.add_argument("--batch", type=int, default=16, help="prefixlm backend: sequences per batch")
     ap.add_argument("--batch-tokens", type=int, default=160_000,
                     help="stitched / soft backends: prompt-token budget per batch (160k suits a 1B encoder; a 4B encoder needs about 40k)")
@@ -156,6 +156,9 @@ def main() -> None:
     elif args.backend == "soft":
         with args.out.open("a") as f:
             generate_soft(args.model_dir, pairs, f, args.max_tokens, args.batch, args.batch_tokens)
+    elif args.backend == "merged":
+        with args.out.open("a") as f:
+            generate_merged(args.model_dir, pairs, f, args.max_tokens, args.batch, args.batch_tokens)
     else:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -534,7 +537,7 @@ def generate_hybrid(model_dir: str, pairs: list[tuple[str, str, str]], out, max_
 
 def generate_soft(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 16,
                   batch_tokens: int = 160_000) -> None:
-    """Greedy decoding for E5 (src/train/soft.py): the encoder reads the prompt once and its stitched states become the
+    """Greedy decoding for E5-soft-tokens (src/train/soft.py): the encoder reads the prompt once and its stitched states become the
     decoder's input at the prompt positions (left-padded within a length-sorted batch, explicit position ids from 0 on
     the first real position); the decoder prefills over them with a growing cache and decodes the answer through its
     ordinary embeddings."""
@@ -649,6 +652,73 @@ def generate_stitched(model_dir: str, pairs: list[tuple[str, str, str]], out, ma
             gen = []
             for step in range(max_tokens + 1):
                 h = model.decode(nxt[:, None], dec_mask, enc, enc_mask, pos, cache)
+                nxt = model.lm_head(h[:, -1]).argmax(-1)
+                if step == max_tokens:
+                    break
+                nxt = torch.where(done, torch.full_like(nxt, pad), nxt)
+                gen.append(nxt)
+                done = done | (nxt == eos)
+                if bool(done.all()):
+                    break
+                dec_mask = torch.cat([dec_mask, torch.ones((len(seqs), 1), dtype=torch.long, device="cuda")], 1)
+                pos = pos + 1
+        gen_t = torch.stack(gen, 1).tolist()
+        for r, i in enumerate(idx):
+            toks = []
+            hit_eos = eos in gen_t[r]  # a capped output has no EOS and is counted as it stands
+            for t in gen_t[r]:
+                if t == eos:
+                    break
+                toks.append(t)
+            id_, v, _ = pairs[i]
+            out.write(json.dumps({"id": id_, "variant": v, "text": tok.decode(toks, skip_special_tokens=True),
+                                  "prompt_tokens": len(seqs[r]), "output_tokens": len(toks) + int(hit_eos)}) + "\n")
+        out.flush()
+        if n_batches % 50 == 1:
+            print(f"[{bi}/{len(order)}] {time.time() - t0:.0f}s", flush=True)
+
+
+def generate_merged(model_dir: str, pairs: list[tuple[str, str, str]], out, max_tokens: int, batch: int = 16,
+                    batch_tokens: int = 160_000) -> None:
+    """Greedy decoding for E5-merged-attention (src/train/merged.py): one encoder pass and the stitch per batch, then the Gemma 3 decoder from <bos> with a growing, untrimmed cache, every layer attending to its stitched
+    encoder states (projected once per batch) and to the answer so far."""
+    import torch
+    from transformers import AutoTokenizer, DynamicCache
+
+    from src.train.merged import MergedAttention
+
+    tok = AutoTokenizer.from_pretrained(model_dir)
+    model = MergedAttention.load(model_dir, attn="sdpa", gradient_checkpointing=False).cuda().eval()
+    eos = tok.eos_token_id
+    pad = tok.pad_token_id if tok.pad_token_id is not None else eos
+    start = tok.bos_token_id if tok.bos_token_id is not None else eos
+    enc_all = tokenise_prompts(tok, pairs)
+    order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
+    t0 = time.time()
+    bi = 0
+    n_batches = 0
+    while bi < len(order):
+        longest = len(enc_all[order[min(bi + batch, len(order)) - 1]])
+        bs = max(1, min(batch, batch_tokens // longest))
+        idx = order[bi:bi + bs]
+        bi += bs
+        n_batches += 1
+        seqs = [enc_all[i] for i in idx]
+        n = encoder_pad_len(max(len(s) for s in seqs))
+        enc_ids = torch.full((len(seqs), n), pad, dtype=torch.long); enc_mask = torch.zeros((len(seqs), n), dtype=torch.long)
+        for r, s in enumerate(seqs):
+            enc_ids[r, :len(s)] = torch.tensor(s); enc_mask[r, :len(s)] = 1
+        enc_ids, enc_mask = enc_ids.cuda(), enc_mask.cuda()
+        with torch.no_grad():
+            model.set_encoder(model.encode(enc_ids, enc_mask))
+            cache = DynamicCache()  # untrimmed: the merged mask applies the sliding window itself
+            dec_mask = torch.ones((len(seqs), 1), dtype=torch.long, device="cuda")
+            nxt = torch.full((len(seqs),), start, dtype=torch.long, device="cuda")
+            pos = torch.zeros((len(seqs), 1), dtype=torch.long, device="cuda")
+            done = torch.zeros(len(seqs), dtype=torch.bool, device="cuda")
+            gen = []
+            for step in range(max_tokens + 1):
+                h = model.decode(nxt[:, None], dec_mask, enc_mask, pos, cache)
                 nxt = model.lm_head(h[:, -1]).argmax(-1)
                 if step == max_tokens:
                     break

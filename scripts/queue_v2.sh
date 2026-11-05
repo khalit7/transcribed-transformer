@@ -6,13 +6,12 @@
 # once. Resumable: a run already scored and logged is skipped, a trained run is not retrained, an interrupted run resumes
 # from its last checkpoint if that was written by the same config.
 #
-#   scripts/queue_v2.sh run configs/v2/e1-gemma3-270m-v2.yaml   # arm 1 alone: the pre-registered budget check
-#   echo keep > checkpoints/queue_v2.budget                    # the decision on arm 1 (keep | raise), written by hand
+#   scripts/queue_v2.sh run configs/v2/e1-gemma3-270m-v2.yaml   # arm 1 alone: the budget check
+#   echo 20 > checkpoints/queue_v2.budget                      # the owner's decision on arm 1: questions per episode
 #   scripts/queue_v2.sh all                                     # every arm, in the order scripts/make_v2_configs.py gives
 #
-# `all` refuses until the budget decision is written, and a finished arm is only skipped or reused if its exported
-# training config equals the current one: a budget raised after arm 1 makes the queue stop at arm 1 rather than report an
-# arm trained on 8 questions per episode beside arms trained on 16.
+# `all` refuses until the budget decision is written after arm 1's score, every config must train on that many questions
+# per episode, and a finished arm is only skipped or reused if its exported training config equals the current one.
 #
 # Generation renders the prompt the run trained on (src.train.data.record_prompt, the v2 template and line format) and
 # never cuts a transcript: evidence is a set of line numbers, so a cut could remove the lines the answer rests on. The
@@ -32,11 +31,39 @@ VARIANT=messy  # v2 records carry the one variant they were labelled on
 SPLIT=data/labelled_data_v2/benchmark.jsonl
 EXPECT_RECORDS=52800
 EXPECT_UNSEEN=14400
+EXPECT_ARMS=9  # stated here, not read from the generator alone: an accidental edit to its ORDER must not pass unseen
 PROBES=data/labelled_data_v2/probes/report.json  # the shortcut probes, run before any arm (src.synthesis_v2.probes)
 PROBES_PIN=checkpoints/queue_v2.probes_sha1        # every arm is scored against the same probe report
 
+mkdir -p checkpoints
 log() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
-gate() { $GATE check "$SELF" "$GEN" >/dev/null || { log "review gate refused before $1; stopping"; $GATE check "$SELF" "$GEN" | tee -a "$LOG"; exit 1; }; }
+# Every stitch file an arm starts from (the order's configs and every config given to `run` or `gate-args`): checkpoints/
+# is outside the gate's roots, so these files are hashed with the queue and a refitted or overwritten stitch refuses the
+# launch until it is reviewed. A missing stitch, or a config the reader cannot read, stops the queue here. Only stdout
+# becomes the list; stderr (uv or Python warnings) is shown only when the reader fails.
+CONFIG_ARGS=()
+if [[ "${1:-}" == run || "${1:-}" == gate-args ]]; then CONFIG_ARGS=("${@:2}"); fi
+STITCH_ERR=$(mktemp)
+STITCH_OUT=$(uv run --no-sync python -c "
+import subprocess, sys, yaml
+from pathlib import Path
+r = subprocess.run([sys.executable, 'scripts/make_v2_configs.py', 'order'], capture_output=True, text=True)
+if r.returncode:
+    sys.exit('make_v2_configs.py order failed: ' + r.stderr.strip())
+out = set()
+for c in r.stdout.split() + sys.argv[1:]:
+    s = yaml.safe_load(Path(c).read_text())['model'].get('stitch')
+    if s:
+        if not Path(s).is_file():
+            sys.exit(f'{c}: stitch {s} does not exist')
+        out.add(s)
+print('\n'.join(sorted(out)))" "${CONFIG_ARGS[@]}" 2>"$STITCH_ERR") || {
+    log "cannot read the stitch files: $(tail -3 "$STITCH_ERR"); stopping"; rm -f "$STITCH_ERR"; exit 1; }
+rm -f "$STITCH_ERR"
+STITCHES=()
+[[ -n $STITCH_OUT ]] && mapfile -t STITCHES <<< "$STITCH_OUT"
+gate() { $GATE check "$SELF" "$GEN" "${STITCHES[@]}" >/dev/null 2>&1 || {
+    log "review gate refused before $1; stopping"; $GATE check "$SELF" "$GEN" "${STITCHES[@]}" 2>&1 | tee -a "$LOG"; exit 1; }; }
 
 # name arch base encoder_base wandb_project, read through the config loader so defaults apply
 cfg_fields() { uv run --no-sync python -c "
@@ -136,14 +163,14 @@ pin_probes() {
     [[ "$(cat "$PROBES_PIN")" == "$sha" ]] || { log "probe report changed since $PROBES_PIN was written; stopping"; exit 1; }
 }
 
-# the budget decision agrees with the configs: keep = 8 questions per episode, raise = 16, in every config of the order
+# the budget decision (questions per episode, a number) agrees with every config given
 budget_matches() {  # $1 decision
     uv run --no-sync python -c "
 import sys; from pathlib import Path; from src.train.config import load_config
-want = {'keep': 8, 'raise': 16}[sys.argv[1]]
+want = int(sys.argv[1])
 got = {p: load_config(Path(p)).data.questions_per_episode for p in sys.argv[2:]}
 bad = {p: k for p, k in got.items() if k != want}
-print(f'budget {sys.argv[1]}: {len(got) - len(bad)} of {len(got)} configs at {want} questions per episode')
+print(f'budget {want}: {len(got) - len(bad)} of {len(got)} configs at {want} questions per episode')
 sys.exit(1 if bad else 0)" "$@"
 }
 
@@ -254,31 +281,27 @@ run() {  # $1 config
     echo "$stamp $(sha1sum "$PROBES" | cut -d' ' -f1)" > "$dir/eval/benchmark/score.stamp"
 }
 
-# the pre-registered pause: arm 1 scored, then the budget decision (keep | raise) written after its score
+# the pause: arm 1 scored, then the budget decision (questions per episode) written after its score
 budget_pause_passed() {
     local arm1=checkpoints/e1-gemma3-270m-v2/eval/benchmark/score.stamp decision
     decision=$(cat checkpoints/queue_v2.budget 2>/dev/null || true)
-    if [[ "$decision" != keep && "$decision" != raise ]]; then
-        log "no budget decision in checkpoints/queue_v2.budget (keep | raise); run arm 1 alone first"; exit 1
+    if [[ ! "$decision" =~ ^[0-9]+$ ]]; then
+        log "no budget decision in checkpoints/queue_v2.budget (questions per episode); run arm 1 alone first"; exit 1
     fi
     if [[ ! -f $arm1 || ! checkpoints/queue_v2.budget -nt $arm1 ]]; then
         log "the budget decision must be written after arm 1 is scored ($arm1); run arm 1 alone first"; exit 1
     fi
 }
 
-mkdir -p checkpoints
 case "${1:-}" in
     all) shift
          [[ -f $PROBES ]] || { log "all: no shortcut-probe report at $PROBES; run python -m src.synthesis_v2.probes first"; exit 1; }
-         decision=$(cat checkpoints/queue_v2.budget 2>/dev/null || true)
-         if [[ "$decision" != keep && "$decision" != raise ]]; then
-             log "all: no budget decision in checkpoints/queue_v2.budget (keep | raise); run arm 1 alone first"; exit 1
-         fi
          budget_pause_passed
+         decision=$(cat checkpoints/queue_v2.budget)
          stage "check build" check_build
          ORDER_OUT=$(uv run --no-sync python "$GEN" order) || { log "cannot read the run order; stopping"; exit 1; }
          mapfile -t CONFIGS <<< "$ORDER_OUT"
-         [[ ${#CONFIGS[@]} -eq 16 && -n "${CONFIGS[0]}" ]] || { log "expected 16 configs in the run order, got ${#CONFIGS[@]}; stopping"; exit 1; }
+         [[ ${#CONFIGS[@]} -eq $EXPECT_ARMS && -n "${CONFIGS[0]}" ]] || { log "expected $EXPECT_ARMS configs in the run order, got ${#CONFIGS[@]}; stopping"; exit 1; }
          stage "budget $decision" budget_matches "$decision" "${CONFIGS[@]}"
          log "budget decision: $decision"
          for c in "${CONFIGS[@]}"; do run "$c"; done; log "QUEUE DONE (${#CONFIGS[@]})" ;;
@@ -290,5 +313,6 @@ case "${1:-}" in
              stage "budget" budget_matches "$(cat checkpoints/queue_v2.budget)" "$@"
          fi
          stage "check build" check_build; for c in "$@"; do run "$c"; done; log "QUEUE DONE ($#)" ;;
-    *) echo "usage: $SELF all | run <config.yaml>..."; exit 2 ;;
+    gate-args) printf '%s\n' "$SELF" "$GEN" "${STITCHES[@]}" ;;  # the gate's argument list for `all` (with configs: for `run`), in order
+    *) echo "usage: $SELF all | run <config.yaml>... | gate-args [<config.yaml>...]"; exit 2 ;;
 esac

@@ -1,5 +1,5 @@
 # Adaptation stage for E1++ on Gemma 3 4B (pretrained, multimodal checkpoint; the image tower is frozen and never called), the matched
-# control of E5++ on the 4B decoder: the continuation objective (a document cut in its middle half, the prefix read as tokens, up to
+# control of E5-soft-tokens++ on the 4B decoder: the continuation objective (a document cut in its middle half, the prefix read as tokens, up to
 # 2,048 tokens of the continuation predicted, loss on the continuation only) on the outside-text sample of the ++ stages (~131k
 # documents, one epoch, ~4.1k steps), identical to configs/adapt/continuation-corpora-gemma3-1b-pt.yaml but for the decoder. E1's
 # recipe (fp32 masters, sharded), 16k cap, 8k micro-batches.
@@ -35,4 +35,4 @@ val_every: 500
 checkpoint_minutes: 30
 keep_checkpoints: 1
 wandb_project: tt-pretrain
-tags: [adapt, continuation, corpora, google/gemma-3-4b-pt, control-e5pp-4b]
+tags: [adapt, continuation, corpora, google/gemma-3-4b-pt, control-e5-soft-tokens-pp-4b]

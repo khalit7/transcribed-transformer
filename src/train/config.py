@@ -6,6 +6,20 @@ from typing import Literal
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 
+WANDB_TAG_MAX = 64
+
+
+def short_tag(tag: str) -> str:
+    """A wandb tag within wandb's 64-character cap: a longer one (a long run-directory name, e.g. an adaptation stage's)
+    keeps its first and last 27 characters around a hash of the whole: deterministic, never colliding in practice, and
+    both ends readable (e.g. `adapt-continuation-corpora--<hash>-t5gemma2-1b-enc-gemma3-270m`, the encoder and decoder
+    visible); a middle part such as the experiment name may fall inside the hash, and is in the run's other tags."""
+    if len(tag) <= WANDB_TAG_MAX:
+        return tag
+    import hashlib
+    keep = (WANDB_TAG_MAX - 10) // 2  # two dashes and an 8-character hash between the two ends
+    return f"{tag[:keep]}-{hashlib.sha1(tag.encode()).hexdigest()[:8]}-{tag[-keep:]}"
+
 
 class DataConfig(BaseModel):
     train: Path = Path("data/labelled_data/train.jsonl")
@@ -34,10 +48,15 @@ class ModelConfig(BaseModel):
     # stitched: E4-mix-and-match, src/train/stitched.py: the text encoder of encoder_base with the decoder of base (both
     # T5Gemma 2, different sizes), joined by an affine stitch on the encoder states fitted beforehand (`stitch`,
     # src/train/fit_stitch.py); everything trains, DDP. base may be a Stitched.save dir.
-    # soft: E5, src/train/soft.py: the decoder-only model (base) exactly as in E1, reading at its prompt positions the text encoder
+    # soft: E5-soft-tokens, src/train/soft.py: the decoder-only model (base) exactly as in E1, reading at its prompt positions the text encoder
     # of encoder_base mapped into its embedding space by an affine stitch (`stitch`, fit_stitch.py --target-embeddings) instead
     # of the token embeddings; no new attention; everything trains, DDP or fsdp (the 4B-decoder arms). base may be a SoftStitched.save dir.
-    arch: Literal["decoder", "encdec", "hf_encdec", "hybrid", "stitched", "soft"] = "decoder"
+    # merged: E5-merged-attention, src/train/merged.py: the decoder-only model (base, Gemma 3) reads the text encoder of
+    # encoder_base through merged attention as a T5Gemma 2 decoder does (its own key/value projections over the encoder
+    # states, no new attention weights), its decoder sequence the answer only; one affine stitch applied once to the encoder
+    # output, fitted (`stitch`: fit_stitch.py --target-layer-mean) or fresh (`stitch: null`, learned in adaptation). SDPA
+    # only. base may be a MergedAttention.save dir.
+    arch: Literal["decoder", "encdec", "hf_encdec", "hybrid", "stitched", "soft", "merged"] = "decoder"
     encoder_base: str | None = None  # hybrid / stitched / soft: the encoder-decoder checkpoint whose text encoder is used
     stitch: Path | None = None  # stitched / soft: the fitted map (fit_stitch.py output); None = a fresh random map
     # parameter-name substrings that train; everything else is frozen (None: every parameter trains). E6 (frozen decoder): [encoder, cross]
@@ -103,7 +122,7 @@ class AdaptConfig(BaseModel):
 
 
 class TrainConfig(BaseModel):
-    experiment: Literal["e1", "e2", "e3", "e4", "e5", "e6"]
+    experiment: Literal["e1", "e2", "e3", "e4", "e5-soft-tokens", "e5-merged-attention", "e6"]
     name: str
     seed: int = 0
     data: DataConfig
@@ -134,7 +153,7 @@ class TrainConfig(BaseModel):
         # wandb caps tags at 64 characters, so a local checkpoint is tagged by its run directory, not its full path
         base = Path(self.model.base)
         base_tag = (base.parent.name if base.name == "final" else base.name) if local else self.model.base
-        return sorted({self.experiment, base_tag, *size, *stage, *self.tags})
+        return sorted({short_tag(t) for t in (self.experiment, base_tag, *size, *stage, *self.tags)})
 
 
 def load_config(path: Path) -> TrainConfig:

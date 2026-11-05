@@ -1,4 +1,4 @@
-# Adaptation stage for E1++ on Gemma 3 1B, the matched control of E5++'s adaptation: the continuation objective (a document cut in its
+# Adaptation stage for E1++ on Gemma 3 1B, the matched control of E5-soft-tokens++'s adaptation: the continuation objective (a document cut in its
 # middle half, the prefix read as tokens, up to 2,048 tokens of the continuation predicted, loss on the continuation only) on the
 # outside-text sample the Qwen E1++/E2++ stages used (~131k documents, one epoch, ~4.1k steps), so the two adapted arms differ in
 # exactly one thing: whether the prefix enters as tokens or as the encoder's states. The small-data version on the training
@@ -34,4 +34,4 @@ val_every: 500
 checkpoint_minutes: 30
 keep_checkpoints: 1
 wandb_project: tt-pretrain
-tags: [adapt, continuation, corpora, google/gemma-3-1b-pt, control-e5pp]
+tags: [adapt, continuation, corpora, google/gemma-3-1b-pt, control-e5-soft-tokens-pp]

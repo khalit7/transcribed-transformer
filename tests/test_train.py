@@ -544,7 +544,7 @@ def test_soft_save_and_load_round_trip(tmp_path, monkeypatch):
 
 
 def test_soft_stitch_fit_onto_embeddings_starts_the_decoder_near_its_own_input():
-    """The E5 stitch is fitted onto the decoder's scaled embeddings of the same tokens: on a synthetic encoder whose
+    """The E5-soft-tokens stitch is fitted onto the decoder's scaled embeddings of the same tokens: on a synthetic encoder whose
     states are an affine function of those embeddings, the fitted map recovers them and the soft model equals the plain
     decoder."""
     import torch
@@ -595,7 +595,7 @@ def test_collate_continuation_matches_the_seq2seq_cuts_and_supervises_the_contin
 def test_collate_encdec_seq2seq_with_the_prefix_on_the_decoder_side():
     from src.train.data import collate_encdec
     ex = [Example(id="a", variant="c", input_ids=np.arange(10, 30, dtype=np.int32), n_prompt=0)]
-    # E5's adaptation layout: encoder reads the prefix, the decoder side is the prefix (its positions carry the
+    # E5-soft-tokens' adaptation layout: encoder reads the prefix, the decoder side is the prefix (its positions carry the
     # stitched states) then the continuation, no start token, labels on the continuation only
     s = collate_encdec(ex, [0], pad_id=0, start_id=999, seed=1, seq2seq=True, max_target=3, cut=(0.5, 0.5), dec_prompt=True, dec_start=False)
     assert s["enc_ids"][0].tolist() == list(range(10, 20)) and s["enc_mask"][0].sum() == 10
@@ -952,6 +952,7 @@ def test_no_shortcut_slices_drop_the_flagged_question_band_pairs(tmp_path):
     s = res["variants"]["clean"]
     assert s["band=0-4k/cell=seen_q"]["n"] == 2 and s["band=0-4k/cell=seen_q/no_shortcut"]["n"] == 1
     assert s["band=12-16k/cell=seen_q/no_shortcut"]["n"] == 2
+    assert s["band=0-4k/cell=seen_q/valid_only"]["n"] == 2 and s["cell=seen_q/valid_only"]["n"] == 4  # every output parses
     plain, _ = _by_gold(gold, outs, "label")
     assert not any("no_shortcut" in k for k in plain["variants"]["clean"])
 
@@ -969,3 +970,24 @@ def test_tokenise_prompts_matches_one_call_in_any_chunking():
     for chunk in (1, 4, 1000):
         got = tokenise_prompts(Tok(), pairs, chunk=chunk)
         assert [list(g) for g in got] == want and all(g.dtype == np.int32 for g in got)
+
+
+def test_valid_only_slices_keep_only_parsed_outputs():
+    from src.train.evaluate import _by_gold
+    recs = [_v2_record("a", "q1", "one", "0-4k"), _v2_record("b", "q1", "one", "0-4k")]
+    gold = {r["id"]: r for r in recs}
+    outs = [{"id": recs[0]["id"], "variant": "clean", "prompt_tokens": 10,
+             "text": json.dumps({"evidence": [], "answer": "one", "summary": ""})},
+            {"id": recs[1]["id"], "variant": "clean", "prompt_tokens": 10, "text": '{"evidence": [1, 2, 3, 4'}]  # a runaway
+    res, _ = _by_gold(gold, outs, "label")
+    s = res["variants"]["clean"]
+    assert s["band=0-4k/cell=seen_q"]["accuracy"] == 0.5
+    assert s["band=0-4k/cell=seen_q/valid_only"]["n"] == 1 and s["band=0-4k/cell=seen_q/valid_only"]["accuracy"] == 1.0
+
+
+def test_wandb_tags_stay_within_the_64_character_cap():
+    from src.train.config import short_tag
+    long = "adapt-continuation-corpora-e5-merged-attention-learned-t5gemma2-270m-enc-gemma3-270m"
+    t = short_tag(long)
+    assert len(t) == 64 and t.startswith(long[:27]) and t.endswith(long[-27:]) and short_tag(long) == t
+    assert short_tag(long + "x") != t and short_tag("e1") == "e1"

@@ -51,6 +51,7 @@ from src.train.data import (
 from src.train.encdec import EncDec
 from src.train.hybrid import Hybrid
 from src.train.masks import FLEX_KERNEL_OPTIONS, prefix_lm_mask
+from src.train.merged import MergedAttention
 from src.train.soft import SoftStitched
 from src.train.stitched import Stitched
 
@@ -155,6 +156,28 @@ def load_model(cfg: TrainConfig, device: torch.device):
             raise SystemExit("soft: target_loss applies lm_head directly; this decoder's logit softcapping would be skipped")
         if cfg.model.sharding == "fsdp":  # the 4B-decoder arms: ~4.9B parameters
             if cfg.model.frozen:  # before sharding: FSDP2 keeps per-parameter requires_grad, the optimizer skips frozen shards
+                n_on, n_off = freeze_named(model, cfg.model.frozen)
+                log(f"frozen {cfg.model.frozen}: {n_on / 1e6:.1f}M parameters train, {n_off / 1e6:.1f}M frozen")
+            return tok, shard_stitched(prepare_for_sharding(model, cfg, device)), attn
+        return tok, model.to(device), attn
+    if cfg.model.arch == "merged":
+        if cfg.model.lora_r:
+            raise SystemExit("merged trains every parameter; drop lora_r")
+        if attn != "sdpa":
+            raise SystemExit(f"merged: the boolean merged mask needs model.attn sdpa, not {attn}")
+        if MergedAttention.is_merged_dir(cfg.model.base):
+            model = MergedAttention.load(cfg.model.base, attn, cfg.model.gradient_checkpointing)
+        else:
+            if not cfg.model.encoder_base:
+                raise SystemExit("merged needs model.encoder_base (the T5Gemma 2 whose text encoder is read); model.base is the decoder")
+            log("merged: stitch " + (f"fitted ({cfg.model.stitch})" if cfg.model.stitch else
+                                                f"fresh (seed {cfg.seed}), learned in training"))
+            model = MergedAttention.from_pretrained(cfg.model.base, cfg.model.encoder_base, attn, cfg.model.gradient_checkpointing,
+                                                    cfg.model.stitch, seed=cfg.seed)
+        if getattr(model.config, "final_logit_softcapping", None):
+            raise SystemExit("merged: target_loss applies lm_head directly; this decoder's logit softcapping would be skipped")
+        if cfg.model.sharding == "fsdp":
+            if cfg.model.frozen:
                 n_on, n_off = freeze_named(model, cfg.model.frozen)
                 log(f"frozen {cfg.model.frozen}: {n_on / 1e6:.1f}M parameters train, {n_off / 1e6:.1f}M frozen")
             return tok, shard_stitched(prepare_for_sharding(model, cfg, device)), attn
@@ -297,11 +320,11 @@ class ShardedHF(torch.nn.Module):
 
 
 class ShardedStitched(torch.nn.Module):
-    """A Stitched or SoftStitched model behind one forward that computes the task loss (FSDP2 root unit, as
+    """A Stitched, SoftStitched or MergedAttention model behind one forward that computes the task loss (FSDP2 root unit, as
     ShardedHF); both expose (enc_ids, enc_mask, dec_ids, dec_mask) -> hidden and `lm_head`. The attribute is named
     `hf` so the sharded export's prefix handling applies unchanged."""
 
-    def __init__(self, m: "Stitched | SoftStitched"):
+    def __init__(self, m: "Stitched | SoftStitched | MergedAttention"):
         super().__init__()
         self.hf = m
         self.config = m.config
@@ -314,7 +337,7 @@ class ShardedStitched(torch.nn.Module):
         return chunked_ce(self.hf.lm_head, hidden[mask], labels[mask]), int(mask.sum())
 
 
-def shard_stitched(model: "Stitched | SoftStitched") -> ShardedStitched:
+def shard_stitched(model: "Stitched | SoftStitched | MergedAttention") -> ShardedStitched:
     """FSDP2 over a stitched or soft-token pair: every encoder and decoder block a unit; the stitch, embeddings, norms
     and head in the root, whose forward is the loss."""
     from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
@@ -418,7 +441,7 @@ def model_loss(raw, batch: dict, device: torch.device, prefix_lm: str | None = N
     that predict a target token go through lm_head; nothing else does. `prefix_lm` names the attention implementation
     when the prompt is attended bidirectionally (E2); None keeps the causal mask (E1)."""
     labels = batch["labels"].to(device, non_blocking=True)
-    if isinstance(raw, (Hybrid, Stitched, SoftStitched)):
+    if isinstance(raw, (Hybrid, Stitched, SoftStitched, MergedAttention)):
         hidden = raw(batch["enc_ids"].to(device, non_blocking=True), batch["enc_mask"].to(device, non_blocking=True),
                      batch["dec_ids"].to(device, non_blocking=True), batch["dec_mask"].to(device, non_blocking=True))
         mask = labels != -100
@@ -764,14 +787,15 @@ def main() -> None:
         return mntp_mask(batch, mask_prob, mask_id, seed) if mntp else batch
 
     pad_kw = {"pad_to": 128, "min_len": 256} if prefix_lm else {}
-    encdec = cfg.model.arch in ("encdec", "hf_encdec", "hybrid", "stitched", "soft")
+    encdec = cfg.model.arch in ("encdec", "hf_encdec", "hybrid", "stitched", "soft", "merged")
     # decoder start token: the tokenizer's <bos> for a native encoder-decoder (what T5Gemma 2 was trained with), eos for E3.
     # The hybrid's decoder reads the prompt itself (opening with the tokenizer's own start token, as in E1): no extra one.
-    # E5's decoder side is the prompt too (its positions carry the stitched encoder states), then the answer.
+    # E5-soft-tokens' decoder side is the prompt too (its positions carry the stitched encoder states), then the answer.
     hybrid = cfg.model.arch in ("hybrid", "soft")
     if hybrid and not cfg.model.decoder_sees_prompt:
         raise SystemExit(f"{cfg.model.arch}: the decoder side carries the prompt; set model.decoder_sees_prompt: true")
-    start_id = tok.bos_token_id if cfg.model.arch in ("hf_encdec", "stitched") and tok.bos_token_id is not None else tok.eos_token_id
+    # E5-merged-attention's Gemma 3 decoder starts its answer-only sequence from <bos>, as T5Gemma 2's decoders do
+    start_id = tok.bos_token_id if cfg.model.arch in ("hf_encdec", "stitched", "merged") and tok.bos_token_id is not None else tok.eos_token_id
     seq2seq = adapt is not None and adapt.objective in ("seq2seq", "mixed")
     mixed = adapt is not None and adapt.objective == "mixed"
     if mixed and not encdec:
@@ -806,7 +830,7 @@ def main() -> None:
                                adapt.max_target if adapt else 2048, adapt.cut if adapt else (0.25, 0.75),
                                dec_prompt=cfg.model.decoder_sees_prompt, dec_start=not hybrid, pad_encoder=eval_mode)
             return mask_encoder_side(b, mask_prob, mask_id, seed + 1) if mixed else b
-        if seq2seq and adapt is not None:  # a decoder-only model under the continuation objective (E5's matched control)
+        if seq2seq and adapt is not None:  # a decoder-only model under the continuation objective (E5-soft-tokens' matched control)
             return prepare(collate_continuation(examples, micro, pad_id, cut_seed[0], adapt.max_target, adapt.cut, **pad_kw), seed)
         return prepare(collate(examples, micro, pad_id, **pad_kw), seed)
 
@@ -1039,6 +1063,9 @@ def main() -> None:
                 torch.save(sd, final / "encdec.pt")
                 base = cfg.model.base if not EncDec.is_encdec_dir(cfg.model.base) else json.loads((Path(cfg.model.base) / "encdec.json").read_text())["base"]
                 (final / "encdec.json").write_text(json.dumps({"base": base, "attn": attn, "lora_r": 0, "lora_alpha": 0}))
+            elif isinstance(model, ShardedStitched) and isinstance(model.hf, MergedAttention):
+                torch.save(sd, final / "merged.pt")
+                (final / "merged.json").write_text(json.dumps({"dec_base": model.hf.dec_base, "enc_base": model.hf.enc_base, "attn": attn}))
             elif isinstance(model, ShardedStitched) and isinstance(model.hf, SoftStitched):
                 torch.save(sd, final / "soft.pt")
                 (final / "soft.json").write_text(json.dumps({"dec_base": model.hf.dec_base, "enc_base": model.hf.enc_base, "attn": attn}))
@@ -1055,7 +1082,7 @@ def main() -> None:
     elif not args.smoke and rank == 0:
         raw = unwrap(model)
         final = run_dir / "final"
-        if isinstance(raw, (EncDec, Hybrid, Stitched, SoftStitched)):
+        if isinstance(raw, (EncDec, Hybrid, Stitched, SoftStitched, MergedAttention)):
             raw.save(final, tok)
         else:
             raw.save_pretrained(final, safe_serialization=True)

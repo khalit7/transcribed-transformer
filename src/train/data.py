@@ -490,7 +490,7 @@ def collate_encdec(examples: list[Example], idx: list[int], pad_id: int, start_i
     prompt through self-attention as well as the encoder's states through cross-attention. dec_start=False
     (the E6 decoder-only + encoder arm, whose decoder's prompt already opens with its start token): no `start_id` is prepended, so
     the decoder side is the prompt then the target, exactly the decoder's own fine-tuning input. Under seq2seq with
-    dec_prompt (E5's adaptation stage) the decoder side is the document prefix then the continuation: the encoder reads
+    dec_prompt (E5-soft-tokens' adaptation stage) the decoder side is the document prefix then the continuation: the encoder reads
     the prefix, the decoder's prefix positions carry its states, and the loss is on the continuation only."""
     encs, tgts, prefixes = [], [], []
     off = 1 if dec_start else 0
@@ -562,7 +562,7 @@ def plan_epoch(examples: list[Example], batch_sequences: int, micro_tokens: int,
 
 def collate_continuation(examples: list[Example], idx: list[int], pad_id: int, seed: int, max_target: int = 2048,
                          cut: tuple[float, float] = (0.25, 0.75), pad_to: int = 1, min_len: int = 1) -> dict[str, torch.Tensor]:
-    """The seq2seq adaptation objective for a decoder-only model (the matched control of E5's adaptation stage): each
+    """The seq2seq adaptation objective for a decoder-only model (the matched control of E5-soft-tokens' adaptation stage): each
     document is cut at the same seeded point `collate_encdec(seq2seq=True)` would use, the decoder reads the prefix as
     tokens and predicts up to max_target tokens of the continuation, loss on the continuation only. Same cut points,
     same supervised tokens (`seq2seq_target_count`), so the two arms differ only in how the prefix enters."""

@@ -1,4 +1,4 @@
-"""E5: an encoder stitched into a different decoder's embedding space (soft tokens).
+"""E5-soft-tokens: an encoder stitched into a different decoder's embedding space (soft tokens).
 
 The decoder is a causal language model exactly as E1 fine-tuned it (Gemma 3 1B): no new attention weights, its own
 self-attention over the whole sequence, loss on the answer only. What changes is its input at the prompt positions:

@@ -1,4 +1,4 @@
-# Adaptation stage for E1++ on Gemma 3 270M, the matched control of the E5++ arms into the 270M decoder (D56): the continuation
+# Adaptation stage for E1++ on Gemma 3 270M, the matched control of the E5-soft-tokens++ arms into the 270M decoder (D56): the continuation
 # objective (a document cut in its middle half, the prefix read as tokens, up to 2,048 tokens of the continuation predicted, loss
 # on the continuation only) on the outside-text sample of the ++ stages, identical to configs/adapt/continuation-corpora-gemma3-1b-pt.yaml
 # but for the decoder. E1's recipe, 16k cap.
@@ -33,4 +33,4 @@ val_every: 500
 checkpoint_minutes: 30
 keep_checkpoints: 1
 wandb_project: tt-pretrain
-tags: [adapt, continuation, corpora, google/gemma-3-270m, control-e5pp-270m]
+tags: [adapt, continuation, corpora, google/gemma-3-270m, control-e5-soft-tokens-pp-270m]

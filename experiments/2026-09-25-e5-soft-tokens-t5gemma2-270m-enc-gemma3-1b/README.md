@@ -1,4 +1,4 @@
-# E5: the T5Gemma 2 270m encoder as soft tokens for the Gemma 3 1B decoder
+# E5-soft-tokens: the T5Gemma 2 270m encoder as soft tokens for the Gemma 3 1B decoder
 
 Written before the run, 2026-09-25 17:30; result and verdict added 2026-09-26 09:50.
 
@@ -46,7 +46,7 @@ The mechanism is not new. [LangBridge (Yoon et al., ACL 2024)](https://aclanthol
 - Stitch initialisation: ridge regression from the encoder's states onto the decoder's scaled embedding of the same
   token, over 3M prompt tokens of the training split (`src/train/fit_stitch.py --target-embeddings`, ridge 1e-2 relative
   to the Gram diagonal), held-out explained variance **0.620** (fit in 52 s; `checkpoints/stitch/270m-to-gemma3-1b-embed.json`).
-- Recipe: E1's (`configs/e5/t5gemma2-270m-enc-gemma3-1b.yaml`): lr 1e-5, 50 warm-up steps, weight decay 0.1, 8-bit AdamW
+- Recipe: E1's (`configs/e5-soft-tokens/t5gemma2-270m-enc-gemma3-1b.yaml`): lr 1e-5, 50 warm-up steps, weight decay 0.1, 8-bit AdamW
   with fp32 masters, one epoch, 32 sequences per step, 16k cap, loss on the answer only, DDP, flash-attention on the
   decoder, sdpa on the encoder. Every parameter trains; the stitch at 10× the base rate, as in mix-and-match. Micro-batch
   16k tokens (the smoke decides whether it fits).
@@ -54,7 +54,7 @@ The mechanism is not new. [LangBridge (Yoon et al., ACL 2024)](https://aclanthol
 - Generation: `src/train/generate.py --backend soft` (encoder once, stitched states as the prefill, cached decoding),
   scored by `src/train/evaluate.py` as every arm.
 - Control: `e1-gemma3-1b-pt` (`experiments/2026-09-15-e4-t5gemma2-1b-1b-native-pair/README.md` records it).
-- wandb: [tt-encdec/iv6h1yif](https://wandb.ai/khalit7-/tt-encdec/runs/iv6h1yif) (deleted 2026-09-28; export in `checkpoints/_archive/e5-t5gemma2-270m-enc-gemma3-1b-ddp-bug/wandb_export.json`; fixed re-run `b4qqhyyo`); benchmark keys logged to the same run.
+- wandb: [tt-encdec/iv6h1yif](https://wandb.ai/khalit7-/tt-encdec/runs/iv6h1yif) (deleted 2026-09-28; export in `checkpoints/_archive/e5-soft-tokens-t5gemma2-270m-enc-gemma3-1b-ddp-bug/wandb_export.json`; fixed re-run `b4qqhyyo`); benchmark keys logged to the same run.
 
 ## Result
 
@@ -68,14 +68,14 @@ The mechanism is not new. [LangBridge (Yoon et al., ACL 2024)](https://aclanthol
 | model | macro-F1 | unseen-question macro-F1 | seen-question macro-F1 | evidence F1 | evidence precision | format valid |
 |---|---|---|---|---|---|---|
 | control: Gemma 3 1B (E1) | 0.651 / 0.640 | 0.496 / 0.493 | 0.683 / 0.670 | 0.530 / 0.500 | 0.589 / 0.555 | 0.955 / 0.946 |
-| **E5: 270m encoder into Gemma 3 1B** | 0.636 / 0.620 | 0.461 / 0.450 | 0.672 / 0.655 | 0.531 / 0.494 | 0.594 / 0.550 | 0.959 / 0.944 |
+| **E5-soft-tokens: 270m encoder into Gemma 3 1B** | 0.636 / 0.620 | 0.461 / 0.450 | 0.672 / 0.655 | 0.531 / 0.494 | 0.594 / 0.550 | 0.959 / 0.944 |
 | native 270M encoder + 1B decoder (E4-mix-and-match) | 0.673 / 0.659 | 0.530 / 0.544 | | 0.584 / 0.556 | 0.679 / 0.649 | 0.988 / 0.983 |
 
-  Below the control on answers overall (−0.015 / −0.020) and on unseen questions (−0.035 / −0.043); level on evidence F1 (+0.001 / −0.006), precision and format. Per slice (clean macro-F1, E5 / control): aci_bench 0.556 / 0.582, apptek 0.643 / 0.654, taskmaster 0.654 / 0.666, vulnerability 0.627 / 0.650, complaint 0.725 / 0.700, eod 0.753 / 0.745; messy SPoRC 0.551 / 0.592, messy 8–16k 0.541 / 0.580: the losses are largest on the long, real-ASR slices and on unseen questions, the places a bidirectional read was supposed to help. Val split clean / messy macro-F1 0.678 / 0.647 against the control's 0.687 / 0.670, evidence 0.580 / 0.537 against 0.578 / 0.536.
+  Below the control on answers overall (−0.015 / −0.020) and on unseen questions (−0.035 / −0.043); level on evidence F1 (+0.001 / −0.006), precision and format. Per slice (clean macro-F1, E5-soft-tokens / control): aci_bench 0.556 / 0.582, apptek 0.643 / 0.654, taskmaster 0.654 / 0.666, vulnerability 0.627 / 0.650, complaint 0.725 / 0.700, eod 0.753 / 0.745; messy SPoRC 0.551 / 0.592, messy 8–16k 0.541 / 0.580: the losses are largest on the long, real-ASR slices and on unseen questions, the places a bidirectional read was supposed to help. Val split clean / messy macro-F1 0.678 / 0.647 against the control's 0.687 / 0.670, evidence 0.580 / 0.537 against 0.578 / 0.536.
 
 ## Verdict
 
-> **Re-run under the fixed loop, scored under gold = teacher (2026-10-02).** This arm's re-run scores 0.694 / 0.452 clean macro-F1 / no-twin, evidence F1 0.646 (Opus 0.429 / 0.268) against the fixed E1 control's 0.698 / 0.488, evidence 0.623 (Opus 0.425 / 0.284): −0.004 / −0.000 macro-F1, −0.036 / −0.037 no-twin, +0.024 / +0.025 evidence F1, +0.028 precision; below E1 on nine clean slices including both held-out cells. Level on answers, behind on zero-shot, ahead on evidence. Against the fixed 1b-encoder arm (0.708 / 0.494 / 0.651) the small encoder gives up +0.014 on answers and +0.042 on zero-shot and almost nothing on evidence. The adaptation stage (the E5++ 270m record) adds +0.027 answers, +0.048 no-twin and +0.022 evidence to this arm.
+> **Re-run under the fixed loop, scored under gold = teacher (2026-10-02).** This arm's re-run scores 0.694 / 0.452 clean macro-F1 / no-twin, evidence F1 0.646 (Opus 0.429 / 0.268) against the fixed E1 control's 0.698 / 0.488, evidence 0.623 (Opus 0.425 / 0.284): −0.004 / −0.000 macro-F1, −0.036 / −0.037 no-twin, +0.024 / +0.025 evidence F1, +0.028 precision; below E1 on nine clean slices including both held-out cells. Level on answers, behind on zero-shot, ahead on evidence. Against the fixed 1b-encoder arm (0.708 / 0.494 / 0.651) the small encoder gives up +0.014 on answers and +0.042 on zero-shot and almost nothing on evidence. The adaptation stage (the E5-soft-tokens++ 270m record) adds +0.027 answers, +0.048 no-twin and +0.022 evidence to this arm.
 
 Disconfirmed for this encoder. With the decoder held exactly at E1's and forced to read the encoder, the 270m encoder's bidirectional view of the transcript is worth nothing to it: answers slip a little, zero-shot transfer slips more, evidence is unchanged. The same encoder behind the T5Gemma 2 1B decoder (a decoder adapted by Google to read an encoder) scores 0.673 / 0.530, so the encoder carries usable information; a causal decoder given that information at its input, and 2.8k steps to learn to use it, does not benefit. Three readings are open and this run cannot separate them: the encoder is too small (the mix-and-match grid says encoder capacity is where the gains live, and the 270M one was the smallest confound by design); the stitched input costs the decoder more than the encoder gives (it starts 2.7 nats from its own input and ends 0.009 above the control, so some of the fine-tune was spent recovering rather than gaining); or a causal decoder needs the encoder's states at every layer, as the native decoder has them, rather than once at the input. What is closed: the cheap version of "put an encoder in front of the decoder you have" does not work at this size. One seed.
 

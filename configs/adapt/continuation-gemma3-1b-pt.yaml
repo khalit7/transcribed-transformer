@@ -1,4 +1,4 @@
-# Adaptation stage for E1+ on Gemma 3 1B, the matched control of E5+'s adaptation: the same continuation objective on the same
+# Adaptation stage for E1+ on Gemma 3 1B, the matched control of E5-soft-tokens+'s adaptation: the same continuation objective on the same
 # training transcripts with the same seeded cut points (a document is cut in its middle half; the decoder reads the prefix as
 # tokens and predicts up to 2,048 tokens of the continuation, loss on the continuation only), so the two adapted arms differ in
 # exactly one thing: whether the prefix enters as tokens or as the encoder's states. Budget as the Qwen E1+ stage: 2 epochs of
@@ -29,4 +29,4 @@ val_every: 50
 checkpoint_minutes: 30
 keep_checkpoints: 1
 wandb_project: tt-pretrain
-tags: [adapt, continuation, google/gemma-3-1b-pt, control-e5plus]
+tags: [adapt, continuation, google/gemma-3-1b-pt, control-e5-soft-tokens-plus]

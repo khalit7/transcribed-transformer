@@ -217,6 +217,11 @@ def _slices(gold: dict, rows: list[dict], variant: str, gold_key: str, majority:
     no_twin = [r for r in rows if r["cell"] == "unseen_q" and r["qid"] not in TWINNED_HELD_OUT]
     if no_twin:
         slices["cell=unseen_q_no_twin"] = summarise(no_twin)
+    if band_majority:  # v2: each cell on the outputs that parsed (see the band slices below)
+        for cell in sorted({r["cell"] for r in rows}):
+            valid = [r for r in rows if r["cell"] == cell and r["format_valid"]]
+            if valid:
+                slices[f"cell={cell}/valid_only"] = summarise(valid)
     if any(r.get("gated") for r in rows):  # v2: the held-out cell without the pairs a trained gate settles
         slices["cell=unseen_q_ungated"] = summarise([r for r in no_twin if not r.get("gated")])
     if band_majority and len(qids) > MAX_QID_SLICES:  # v2: too many questions for every one, but its 12 held-out ones are each a claim
@@ -236,6 +241,11 @@ def _slices(gold: dict, rows: list[dict], variant: str, gold_key: str, majority:
                 slices[f"band={band}/cell={cell}"] = summarise(sub)
                 slices[f"band={band}/cell={cell}/floor=majority_answer_in_band"] = _floor(
                     gold, sub, variant, gold_key, lambda r, b=band: band_majority[(r["qid"], b)])
+                # answer quality where the output parsed: separates reading long input worse from looping or breaking the
+                # format more often (an invalid output scores as wrong in every other slice); pre-registered 2026-11-05
+                valid = [r for r in sub if r["format_valid"]]
+                if valid:
+                    slices[f"band={band}/cell={cell}/valid_only"] = summarise(valid)
                 if shortcut_slices:  # the pre-registered reading without the shortcut-prone (question, band) pairs
                     clean = [r for r in sub if not r.get("shortcut")]
                     if clean:

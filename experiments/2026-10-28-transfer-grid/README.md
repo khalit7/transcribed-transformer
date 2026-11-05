@@ -16,7 +16,7 @@ other long-input, short-output tasks should reproduce the same ordering; if it i
 
 ## Prediction
 
-One dataset, ECtHR (pre-registered as three; see the scope change under Setup), nine E1/E4 arms (plus, from 2026-10-30, seven E1++/E5++ arms; see the Setup), one seed. I expect:
+One dataset, ECtHR (pre-registered as three; see the scope change under Setup), nine E1/E4 arms (plus, from 2026-10-30, seven E1++/E5-soft-tokens++ arms; see the Setup), one seed. I expect:
 
 1. **Equal size, different split**: `e4mm-1b-enc-270m-dec` scores above `e4mm-270m-enc-1b-dec` on the headline metric.
 2. **Big encoder, tiny decoder**: `e4mm-4b-enc-270m-dec` scores within noise of `e1-gemma3-4b-pt` and above `e1-gemma3-1b-pt`.
@@ -58,7 +58,7 @@ checkpoints were deleted. The long-input test moves to a dataset built from this
 by a stronger labeller than the compliance data's, with a pre-registered admission test that a dataset must pass before any
 arm trains: a bag-of-words on its first 500 words must fall well short of the pilot. That dataset gets its own record.
 
-**Arms**, nine E1/E4 arms (the seven E5 arms are tabled further down), each the compliance config with only the data paths, over-long policy, epochs and
+**Arms**, nine E1/E4 arms (the seven E5-soft-tokens arms are tabled further down), each the compliance config with only the data paths, over-long policy, epochs and
 `val_every` changed (`scripts/make_transfer_configs.py`; `tests/test_transfer_configs.py` checks the configs differ from
 their sources in nothing else):
 
@@ -74,7 +74,7 @@ their sources in nothing else):
 | `e4mm-1b-enc-270m-dec` | 1b | 270m | ~1.3B | `configs/e4/mm-1b-enc-270m-dec.yaml` |
 | `e4mm-4b-enc-270m-dec` | 4b | 270m | ~4.3B | `configs/e4/mm-4b-enc-270m-dec.yaml` (FSDP) |
 
-**Added 2026-10-30, before any encoder-decoder cell of the grid had scored beyond the 270m-270m pair: the E5 arms with the
+**Added 2026-10-30, before any encoder-decoder cell of the grid had scored beyond the 270m-270m pair: the E5-soft-tokens arms with the
 compliance adaptation stage, seven, run after the nine E4 arms rather than as a separate follow-up.** Each starts from the compliance stage's export
 (`checkpoints/adapt-continuation-corpora-*/final`), so both sides of every pair went through the identical stage and the
 comparison is matched exactly as it was on compliance; no new stages are run. The interface they test was learnt on speech
@@ -83,19 +83,19 @@ transcripts, so a transfer here also says whether that interface carries to writ
 | Arm | Encoder | Decoder | Starts from | Compliance counterpart |
 |---|---|---|---|---|
 | `e1pp-gemma3-1b-pt` | — | Gemma 3 1B, adapted | `adapt-continuation-corpora-gemma3-1b-pt/final` | `configs/e1/gemma3-1b-pt-plusplus.yaml` |
-| `e5pp-t5gemma2-270m-enc-gemma3-1b` | T5Gemma 2 270m | Gemma 3 1B | `adapt-continuation-corpora-e5-t5gemma2-270m-enc-gemma3-1b/final` | `configs/e5/t5gemma2-270m-enc-gemma3-1b-plusplus.yaml` |
-| `e5pp-t5gemma2-1b-enc-gemma3-1b` | 1b | Gemma 3 1B | `…-e5-t5gemma2-1b-enc-gemma3-1b/final` | `…1b-enc-gemma3-1b-plusplus.yaml` |
+| `e5-soft-tokens-pp-t5gemma2-270m-enc-gemma3-1b` | T5Gemma 2 270m | Gemma 3 1B | `adapt-continuation-corpora-e5-soft-tokens-t5gemma2-270m-enc-gemma3-1b/final` | `configs/e5-soft-tokens/t5gemma2-270m-enc-gemma3-1b-plusplus.yaml` |
+| `e5-soft-tokens-pp-t5gemma2-1b-enc-gemma3-1b` | 1b | Gemma 3 1B | `…-e5-soft-tokens-t5gemma2-1b-enc-gemma3-1b/final` | `…1b-enc-gemma3-1b-plusplus.yaml` |
 | `e1pp-gemma3-270m` | — | Gemma 3 270M, adapted | `adapt-continuation-corpora-gemma3-270m/final` | `configs/e1/gemma3-270m-plusplus.yaml` |
-| `e5pp-t5gemma2-270m-enc-gemma3-270m` | 270m | Gemma 3 270M | `…-e5-t5gemma2-270m-enc-gemma3-270m/final` | `…270m-enc-gemma3-270m-plusplus.yaml` |
-| `e5pp-t5gemma2-1b-enc-gemma3-270m` | 1b | Gemma 3 270M | `…-e5-t5gemma2-1b-enc-gemma3-270m/final` | `…1b-enc-gemma3-270m-plusplus.yaml` |
-| `e5pp-t5gemma2-4b-enc-gemma3-270m` | 4b | Gemma 3 270M | `…-e5-t5gemma2-4b-enc-gemma3-270m/final` | `…4b-enc-gemma3-270m-plusplus.yaml` (FSDP) |
+| `e5-soft-tokens-pp-t5gemma2-270m-enc-gemma3-270m` | 270m | Gemma 3 270M | `…-e5-soft-tokens-t5gemma2-270m-enc-gemma3-270m/final` | `…270m-enc-gemma3-270m-plusplus.yaml` |
+| `e5-soft-tokens-pp-t5gemma2-1b-enc-gemma3-270m` | 1b | Gemma 3 270M | `…-e5-soft-tokens-t5gemma2-1b-enc-gemma3-270m/final` | `…1b-enc-gemma3-270m-plusplus.yaml` |
+| `e5-soft-tokens-pp-t5gemma2-4b-enc-gemma3-270m` | 4b | Gemma 3 270M | `…-e5-soft-tokens-t5gemma2-4b-enc-gemma3-270m/final` | `…4b-enc-gemma3-270m-plusplus.yaml` (FSDP) |
 
-Predictions for these, written before any of them ran, from the compliance results (E5++ 1b → 1B +0.036 answers over
-E1++; E5++ 4b → 270M +0.262 over E1++ 270M and within 0.014 of the 4B decoder; the soft stitch below the native stitch at
-the same sizes): (5) every E5++ arm scores above its adapted decoder control, by more at the 270M decoder
-than at the 1B; (6) at the 270M decoder the E5 encoder axis orders 270m < 1b < 4b, and sits at or below the E4 native-stitch
-axis (`e4mm-{270m,1b,4b}-enc-270m-dec`) cell for cell; (7) `e5pp-t5gemma2-4b-enc-gemma3-270m` lands within 0.03 of
-`e1-gemma3-4b-pt` on the headline. What disconfirms: an E5++ arm at or below its E1++ control on the held-out cell; if that happens, the register caveat applies and a fresh stage on ECtHR's own documents is the
+Predictions for these, written before any of them ran, from the compliance results (E5-soft-tokens++ 1b → 1B +0.036 answers over
+E1++; E5-soft-tokens++ 4b → 270M +0.262 over E1++ 270M and within 0.014 of the 4B decoder; the soft stitch below the native stitch at
+the same sizes): (5) every E5-soft-tokens++ arm scores above its adapted decoder control, by more at the 270M decoder
+than at the 1B; (6) at the 270M decoder the E5-soft-tokens encoder axis orders 270m < 1b < 4b, and sits at or below the E4 native-stitch
+axis (`e4mm-{270m,1b,4b}-enc-270m-dec`) cell for cell; (7) `e5-soft-tokens-pp-t5gemma2-4b-enc-gemma3-270m` lands within 0.03 of
+`e1-gemma3-4b-pt` on the headline. What disconfirms: an E5-soft-tokens++ arm at or below its E1++ control on the held-out cell; if that happens, the register caveat applies and a fresh stage on ECtHR's own documents is the
 next run, not a conclusion.
 
 **Prediction 8, added 2026-10-30 after six ECtHR cells: the encoder-decoder advantage over a same-size decoder is a
@@ -160,11 +160,11 @@ id.
    compliance training transfers; I expect it to be weak and it is not a result about capacity.
 2. The pilot, `pilot-e1-gemma3-1b-pt-ecthr`; then the epoch count is written into the arm configs
    (`make_transfer_configs.py grid ecthr=2`), the configs re-hashed and approved.
-3. The nine E4 arms then the seven E5 arms: train, generate on the benchmark (vLLM for decoders, the `hf_encdec`,
+3. The nine E4 arms then the seven E5-soft-tokens arms: train, generate on the benchmark (vLLM for decoders, the `hf_encdec`,
    `stitched` and `soft` backends otherwise), check every pair is present exactly once, score, log to the run. (The queue
-   ran with the E4 arms only until 2026-10-30, when the E5 arms were added.)
+   ran with the E4 arms only until 2026-10-30, when the E5-soft-tokens arms were added.)
 
-Every stage passes the review gate first. wandb projects: `tt-decoder` (E1 and E1++ arms), `tt-encdec` (E4 and E5 arms);
+Every stage passes the review gate first. wandb projects: `tt-decoder` (E1 and E1++ arms), `tt-encdec` (E4 and E5-soft-tokens arms);
 every run tagged `transfer-grid` and `transfer-ecthr`. The transfer runs keep their compliance counterparts' experiment,
 base and size tags (the comparison tags `pair-*`, `grid-*`, `control-*`, `size-control` are dropped), so any results table
 built from wandb for the compliance benchmark must exclude `transfer-grid`, and one for this grid must require it.
@@ -229,7 +229,7 @@ macro-F1 0.801 overall, 0.862 seen, **0.465 held-out, at the 0.474 floor** on bo
 while this arm reads the floor. This is the outcome the pre-registration named as disconfirming; what it means for the
 capacity question is left to the analysis (see Verdict). The seen score is the lowest of the nine (0.862; the grid spans 0.862 to 0.880,
 within the ±0.009 resolution). By length bucket 0.826 / 0.790 / 0.742 / 0.807. The queue stopped itself after this score
-(the seven ECtHR E5 arms do not run, D65).
+(the seven ECtHR E5-soft-tokens arms do not run, D65).
 
 **Audit and analysis of the first six ECtHR cells (2026-10-30; three independent read-only auditors, then three
 independent analysts, two Claude Opus and one Claude Fable in each round).** Every number above reproduces from the raw
@@ -240,7 +240,7 @@ the numbers should be read, recorded here so later cells are read the same way.
 *What ECtHR can and cannot resolve.* The seen-article cell (8,000 of 10,000 pairs) has no headroom: six arms from 270M to
 4B sit within 0.013 (0.867–0.880), the decoder-size axis moves 0.013 there against 0.274 on compliance, 1B → 4B is +0.004,
 and the one-seed paired-bootstrap resolution is about ±0.009. No ordering among the 1B-class arms can be read off it, and
-every remaining cell, E5++ included, is expected to land within ±0.01 of the others there. The held-out cell (2,000
+every remaining cell, E5-soft-tokens++ included, is expected to land within ±0.01 of the others there. The held-out cell (2,000
 pairs, Articles 8 and 10) resolves about ±0.035 and can show large effects (the decoder axis moved 0.185 there), but it
 is two articles, one of which (Article 8) every arm below 4B answers at the floor (phi with gold 0.015–0.087; the 4B 0.445)
 through a shared case-level shortcut (saying `violated` on Article 8 mostly where the case already has another violation,
@@ -250,7 +250,7 @@ disagrees with the 1B arm on 173 held-out pairs; the 1b-1b pair disagrees with t
 scores move by 0.08–0.10 between two runs of one architecture. Bootstrap intervals over cases do not contain this.
 Consequence: on ECtHR, predictions are read on the held-out cell only, with intervals and per-article numbers, as
 "resolved" only beyond about 0.04, and small contrasts (prediction 1 unless the gap is large, prediction 7's 0.03, any
-E5++-vs-E1++ difference at the 1B decoder) are expected to be ties here.
+E5-soft-tokens++-vs-E1++ difference at the 1B decoder) are expected to be ties here.
 
 *The 1b-1b pair against the 1B decoder, re-read.* Overall −0.004 [−0.013, +0.006] and seen −0.006 [−0.015, +0.004]:
 unresolved. Held-out −0.037 [−0.070, −0.004], pooled; averaging per article instead gives −0.024 [−0.056, +0.008]. The
@@ -299,7 +299,7 @@ macro-F1 scales are not comparable (pooled 3–4-option questions under teacher 
 dataset gold), so lead sizes are not compared across them.
 
 *Options for the decision (2026-10-30 evening):* (1) finish the three remaining E4 stitches, then decide
-on the seven ECtHR E5 arms by whether the 4b encoder moves held-out; (2) read ECtHR on held-out with intervals and
+on the seven ECtHR E5-soft-tokens arms by whether the 4b encoder moves held-out; (2) read ECtHR on held-out with intervals and
 per-article numbers, and add forced-choice answer-token log-probability scoring (AUROC) to remove the operating-point
 confound (small evaluator and generation change, a review round, retroactive on the existing exports); (3) rebuild the
 ECtHR task with four or five held-out articles for a larger, more diverse unseen cell (retrains ECtHR, about four days);
@@ -307,7 +307,7 @@ ECtHR task with four or five held-out articles for a larger, more diverse unseen
 intervals miss. Cheapest decisive tests for the 1b-1b question: zero-shot ECtHR with the compliance-trained pairs (the
 deferred stage, 30–60 min each) and teacher-forced answer log-probabilities on the 2,000 held-out pairs (minutes per arm).
 
-*Decision, 2026-10-30 (late evening).* The nine E1/E4 arms run to completion as pre-registered; the seven E1++/E5++ arms
+*Decision, 2026-10-30 (late evening).* The nine E1/E4 arms run to completion as pre-registered; the seven E1++/E5-soft-tokens++ arms
 follow them in the running queue unless I stop it after the ninth cell (open); options (2) to (4) stay open.
 The other two datasets are dropped (the scope change under Setup): on this evidence they would have cost about ten days of
 training (an estimate from the ECtHR arm times) to produce one saturated topic benchmark and one at chance. Four analyses fed the decision, each written without
@@ -382,17 +382,17 @@ review round before the script is used again.
 Deferred from the design, to be taken up only if the grid holds: a second seed on the two equal-size mix-and-match
 arms on ECtHR; task B of ECtHR as a second question set over the same cases; refitting the stitches on the transfer text.
 
-**Superseded 2026-10-30: the E5 arms joined the grid itself, seven, run after the E4 arms (see the Setup).** The earlier
-plan, kept for the record: four E5 fine-tunes from the compliance adaptation checkpoints, queued to run once the E4 arms
+**Superseded 2026-10-30: the E5-soft-tokens arms joined the grid itself, seven, run after the E4 arms (see the Setup).** The earlier
+plan, kept for the record: four E5-soft-tokens fine-tunes from the compliance adaptation checkpoints, queued to run once the E4 arms
 were scored. The question it answers: does marrying an encoder to a decoder-only model through
 an adapted interface beat the decoder alone off the compliance task, as it did on it (+0.036 answers at the 1B decoder,
 +0.262 with the 4b encoder behind the 270M decoder)? On the compliance benchmark the soft-token stitch into a raw decoder-only model was within noise of the decoder
 on answers without the continuation stage (+0.010 with the 1b encoder, −0.004 with the 270m) and lifted answers only
-with it (+0.036 for 1b → 1B over E1++), so an E5 arm here needs the stage. Rather than new stages, I would start both
+with it (+0.036 for 1b → 1B over E1++), so an E5-soft-tokens arm here needs the stage. Rather than new stages, I would start both
 sides of each pair from the compliance stage's exports (`adapt-continuation-corpora-gemma3-{1b-pt,270m}` as the E1++
-controls; `adapt-continuation-corpora-e5-t5gemma2-{1b-enc-gemma3-1b,4b-enc-gemma3-270m}` as the E5++ arms), which keeps
+controls; `adapt-continuation-corpora-e5-soft-tokens-t5gemma2-{1b-enc-gemma3-1b,4b-enc-gemma3-270m}` as the E5-soft-tokens++ arms), which keeps
 the comparison matched exactly as it was on compliance and asks a question of its own: does an interface learned on
-speech transcripts transfer to legal prose? Four runs: E1++ 1B, E5++ 1b-enc → 1B, E1++ 270M, E5++ 4b-enc → 270M. Caveat to carry: a null result cannot separate "the
+speech transcripts transfer to legal prose? Four runs: E1++ 1B, E5-soft-tokens++ 1b-enc → 1B, E1++ 270M, E5-soft-tokens++ 4b-enc → 270M. Caveat to carry: a null result cannot separate "the
 interface does not transfer across register" from "the interface does not help here"; only a fresh stage on ECtHR's own
 documents (9,000 cases, about 20M tokens, enough for a stage of the compliance size) could separate them, at 4 to 10 hours
 per stage per side.

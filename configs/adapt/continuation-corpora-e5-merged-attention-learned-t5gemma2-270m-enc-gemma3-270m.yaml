@@ -1,0 +1,42 @@
+# Adaptation stage for the E5-merged-attention pilot, the learned start: the T5Gemma 2 270m text encoder read by Gemma 3 270M
+# through merged attention (src/train/merged.py: every decoder layer's own key/value projections over the stitched encoder
+# states, no rotary on encoder keys, the decoder sequence the continuation only). One stitch on the encoder output: learned. Everything else is the
+# E5-soft-tokens++ stage on the same pair (configs/adapt/continuation-corpora-e5-soft-tokens-t5gemma2-270m-enc-gemma3-270m.yaml):
+# the continuation objective on the same outside-text sample, the same cuts, budget and recipe, so the two interfaces differ
+# only in how the decoder reads the encoder. SDPA (the merged mask). Pilot: not in the v2 queue; pre-registered before it runs.
+experiment: e5-merged-attention
+name: adapt-continuation-corpora-e5-merged-attention-learned-t5gemma2-270m-enc-gemma3-270m
+seed: 0
+data:
+  variants: [labelled]
+  max_seq_len: 16384
+model:
+  base: google/gemma-3-270m                  # the decoder, E1's
+  encoder_base: google/t5gemma-2-270m-270m   # the encoder donor
+  stitch: null   # a fresh map (seeded), learned entirely in this stage
+  arch: merged
+  attn: sdpa
+  gradient_checkpointing: true
+adapt:
+  objective: seq2seq
+  max_target: 2048
+  cut: [0.25, 0.75]
+  corpora:   # the E1++/E2++ outside-text sample, as every other stage; labelled calls excluded
+    - {path: data/interim/callcenteren/train.jsonl, docs: 88933, val_docs: 100}
+    - {path: data/interim/sporc/train.jsonl, docs: 35000, val_docs: 40}
+    - {path: data/interim/meetingbank/train.jsonl, docs: 1218, val_docs: 10}
+    - {path: data/interim/courtlistener/train.jsonl, docs: 6400, val_docs: 10}
+optim:
+  lr: 1.0e-5
+  lr_mult: {stitch: 10}
+  warmup_steps: 50
+  weight_decay: 0.1
+  optimizer: adamw8bit
+epochs: 1
+batch_sequences: 32
+micro_tokens: 16384
+val_every: 500
+checkpoint_minutes: 30
+keep_checkpoints: 1
+wandb_project: tt-pretrain
+tags: [adapt, continuation, corpora, merged-attention, stitch-learned, google/gemma-3-270m, enc-google/t5gemma-2-270m-270m]
