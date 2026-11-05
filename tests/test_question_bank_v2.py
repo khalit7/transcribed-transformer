@@ -74,7 +74,10 @@ def test_bank_is_every_round_less_removed():
     assert [q.id for q in v2.BANK] == [q.id for q in every if q.id not in v2.REMOVED]
     held = set(v2.HELD_OUT)
     assert len(v2.BANK) - len(held) == 32 and len(held) == 12
-    assert held == (set(v2.ROUNDS_1_TO_3_HELD_OUT) | set(v2.ROUND4_HELD_OUT)) - set(v2.REMOVED)
+    assert held == ((set(v2.ROUNDS_1_TO_3_HELD_OUT) | set(v2.ROUND4_HELD_OUT)) - set(v2.REMOVED)
+                    - set(v2.MOVED_TO_TRAINING)) | set(v2.MOVED_TO_HELD_OUT)
+    assert "v2-per-03-story-answered" not in held and "v2-agr-01-agreement-stated" in held  # the twin audit (D85)
+    assert not set(v2.MOVED_TO_HELD_OUT) & set(v2.REMOVED) and set(v2.MOVED_TO_HELD_OUT) <= {q.id for q in v2.BANK}
 
 
 def test_definitions_are_added_back_once_and_only_to_bank_questions():

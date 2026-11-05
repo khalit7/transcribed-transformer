@@ -956,7 +956,15 @@ ROUND5: list[Question] = [
 # Every held-out survivor keeps a trained sibling: per-06's is per-05 (hst-01, its weak sibling, was cut); nam-02's is
 # num-03; rep-01's is quo-01; the rest are named above ROUNDS_1_TO_3_HELD_OUT and ROUND4_HELD_OUT.
 BANK: list[Question] = [x for x in ROUNDS_1_TO_3 + ROUND4 + ROUND5 if x.id not in REMOVED]
-HELD_OUT: tuple[str, ...] = tuple(i for i in ROUNDS_1_TO_3_HELD_OUT + ROUND4_HELD_OUT if i not in REMOVED)
+# Twin audit (2026-11-05, D85; two independent audits over all 264,000 production labels): per-03 is a narrower version
+# of trained per-05 (per-05's answer settles per-03's on 71% of episodes: best-mapping accuracy 0.860 against a 0.624
+# majority baseline), so it moves to training; agr-01 replaces it in the zero-shot cell, the trained question least
+# predictable from the rest (the other trained questions add 0.009 over its 0.611 baseline) with the steadiest pilot
+# kappa among the independent ones (0.85; at least 0.75 in every stratum). Labels are unchanged; only the flag moves.
+MOVED_TO_TRAINING: tuple[str, ...] = ("v2-per-03-story-answered",)
+MOVED_TO_HELD_OUT: tuple[str, ...] = ("v2-agr-01-agreement-stated",)
+HELD_OUT: tuple[str, ...] = tuple(i for i in ROUNDS_1_TO_3_HELD_OUT + ROUND4_HELD_OUT
+                                  if i not in REMOVED and i not in MOVED_TO_TRAINING) + MOVED_TO_HELD_OUT
 
 # Candidate questions not yet confirmed by a pilot (written to questions_provisional.jsonl only while there are any; never
 # labelled for production). Empty since the bank met its target; a later round adds its candidates here.
