@@ -733,6 +733,9 @@ def main() -> None:
     ap.add_argument("config", type=Path)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--smoke", type=int, default=0, help="run N optimizer steps, no wandb, no checkpoint")
+    ap.add_argument("--smoke-longest", action="store_true",
+                    help="with --smoke: build the whole training set (the cache the real run then reads) and smoke on its "
+                         "longest examples, so the steps exercise peak memory rather than the first records in file order")
     args = ap.parse_args()
     cfg = load_config(args.config)
     rank, world, device = setup_dist()
@@ -823,7 +826,7 @@ def main() -> None:
     log(f"{cfg.model.base}: {n_params / 1e9:.2f}B params ({n_trainable / 1e9:.2f}B trainable), attn={attn}, world={world}")
 
     def data():
-        limit = cfg.batch_sequences * args.smoke * 2 or None
+        limit = (cfg.batch_sequences * args.smoke * 2 or None) if not args.smoke_longest else None
         if cfg.adapt and cfg.adapt.corpora:
             exclude = labelled_doc_ids(cfg.data.train.parent)
             tr = build_corpus_examples(cfg.adapt.corpora, tok, cfg.data.max_seq_len, "train", cfg.seed, exclude, cfg.data.cache_dir, limit)
@@ -849,6 +852,10 @@ def main() -> None:
         dist.barrier(device_ids=[device.index])
     if rank != 0:
         (train, tstats), (val, vstats) = data()
+    if args.smoke and args.smoke_longest:  # the longest examples, enough for the smoke's steps (no data order to preserve)
+        keep = cfg.batch_sequences * args.smoke * 2
+        train = sorted(train, key=lambda e: len(e.input_ids), reverse=True)[:keep]
+        tstats = {**tstats, "smoke_longest": keep, "smoke_min_len": min(len(e.input_ids) for e in train)}
     vidx = list(range(len(val)))
     import random
     random.Random(cfg.seed).shuffle(vidx)

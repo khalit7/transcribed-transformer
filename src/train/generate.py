@@ -37,6 +37,18 @@ def encoder_pad_len(n: int) -> int:
     return ((n + 32) // 32) * 32
 
 
+def tokenise_prompts(tok, pairs: list, chunk: int = 1000) -> list:
+    """Each pair's prompt as int32 token ids, with the tokenizer's default special tokens (as training). Tokenised in
+    chunks and stored compactly: one call over a whole benchmark holds every id as a Python int at once, about 150 bytes
+    a token, which on labelled data v2 (52,800 prompts, about 454M tokens) is more memory than the machine has."""
+    import numpy as np
+
+    out = []
+    for i in range(0, len(pairs), chunk):
+        out.extend(np.asarray(ids, dtype=np.int32) for ids in tok([p for _, _, p in pairs[i:i + chunk]])["input_ids"])
+    return out
+
+
 def load_pairs(split: Path, variants: list[str], limit: int | None, truncate_to: int | None = None,
                tokenizer=None) -> list[tuple[str, str, str]]:
     """(id, variant, prompt) for every pair. `truncate_to` cuts a document from the tail so the prompt fits that many
@@ -189,7 +201,7 @@ def generate_prefix_lm(model_dir: str, pairs: list[tuple[str, str, str]], out, m
         model_dir, dtype=torch.bfloat16, attn_implementation="flex_attention").cuda().eval()
     eos = tok.eos_token_id
     pad = tok.pad_token_id if tok.pad_token_id is not None else eos
-    enc_all = tok([p for _, _, p in pairs])["input_ids"]  # as training: default special tokens
+    enc_all = tokenise_prompts(tok, pairs)  # as training: default special tokens
     order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
     t0 = time.time()
     bi = 0
@@ -268,7 +280,7 @@ def generate_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, max_
     model = EncDec.load(model_dir, gradient_checkpointing=False).cuda().eval()
     eos = tok.eos_token_id
     pad = tok.pad_token_id if tok.pad_token_id is not None else eos
-    enc_all = tok([p for _, _, p in pairs])["input_ids"]  # as training: default special tokens
+    enc_all = tokenise_prompts(tok, pairs)  # as training: default special tokens
     order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
     t0 = time.time()
     bi = 0
@@ -330,7 +342,7 @@ def generate_hf_encdec(model_dir: str, pairs: list[tuple[str, str, str]], out, m
     eos = tok.eos_token_id
     pad = tok.pad_token_id if tok.pad_token_id is not None else eos
     start = tok.bos_token_id if tok.bos_token_id is not None else eos
-    enc_all = tok([p for _, _, p in pairs])["input_ids"]
+    enc_all = tokenise_prompts(tok, pairs)
     order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
     t0 = time.time()
     bi = 0
@@ -384,7 +396,7 @@ def generate_hf_encdec_hybrid(model_dir: str, pairs: list[tuple[str, str, str]],
     eos = tok.eos_token_id
     pad = tok.pad_token_id if tok.pad_token_id is not None else eos
     start = tok.bos_token_id if tok.bos_token_id is not None else eos
-    enc_all = tok([p for _, _, p in pairs])["input_ids"]
+    enc_all = tokenise_prompts(tok, pairs)
     order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
     t0 = time.time()
     bi = 0
@@ -458,7 +470,7 @@ def generate_hybrid(model_dir: str, pairs: list[tuple[str, str, str]], out, max_
     model = Hybrid.load(model_dir, attn=attn, gradient_checkpointing=False).cuda().eval()
     eos = tok.eos_token_id
     pad = tok.pad_token_id if tok.pad_token_id is not None else eos
-    enc_all = tok([p for _, _, p in pairs])["input_ids"]  # opens with the tokenizer's start token, as in training
+    enc_all = tokenise_prompts(tok, pairs)  # opens with the tokenizer's start token, as in training
     order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
     t0 = time.time()
     bi = 0
@@ -537,7 +549,7 @@ def generate_soft(model_dir: str, pairs: list[tuple[str, str, str]], out, max_to
     model = SoftStitched.load(model_dir, attn=attn, gradient_checkpointing=False).cuda().eval()
     eos = tok.eos_token_id
     pad = tok.pad_token_id if tok.pad_token_id is not None else eos
-    enc_all = tok([p for _, _, p in pairs])["input_ids"]  # opens with the tokenizer's start token, as in training
+    enc_all = tokenise_prompts(tok, pairs)  # opens with the tokenizer's start token, as in training
     order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
     t0 = time.time()
     bi = 0
@@ -610,7 +622,7 @@ def generate_stitched(model_dir: str, pairs: list[tuple[str, str, str]], out, ma
     eos = tok.eos_token_id
     pad = tok.pad_token_id if tok.pad_token_id is not None else eos
     start = tok.bos_token_id if tok.bos_token_id is not None else eos
-    enc_all = tok([p for _, _, p in pairs])["input_ids"]
+    enc_all = tokenise_prompts(tok, pairs)
     order = sorted(range(len(pairs)), key=lambda i: len(enc_all[i]))
     t0 = time.time()
     bi = 0

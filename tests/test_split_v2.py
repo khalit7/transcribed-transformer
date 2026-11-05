@@ -268,3 +268,22 @@ def test_with_rows_refuses_when_metadata_is_mostly_missing(monkeypatch):
     monkeypatch.setattr(split, "sporc_rows", lambda ids: {})
     with pytest.raises(SystemExit):
         split._with_rows({"a": {}, "b": {}}, "nodes")
+
+
+def test_probe_helpers_structure_opening_and_position():
+    from src.synthesis_v2 import probes
+    lines = ["host_1: one two three", "guest_1: four five", "SPEAKER_04: six", "host_1: seven"]
+    assert probes._structure(lines, "0-4k") == {"hosts": 1, "guests": 1, "others": 1, "band": "0-4k"}
+    assert probes._opening(lines).split()[:3] == ["one", "two", "three"]
+    assert [probes._position(i, 9) for i in (1, 3, 4, 6, 7, 9)] == ["first", "first", "middle", "middle", "last", "last"]
+    assert probes._position(1, 1) == "first"
+
+
+def test_positions_rule_fires_only_when_long_episodes_skip_the_middle():
+    from src.synthesis_v2 import probes
+    eps = {"a": {"band": "0-4k", "n_lines": 9}, "b": {"band": "12-16k", "n_lines": 9}}
+    labels = {("a", "q"): {"evidence": [1, 5, 9]}, ("b", "q"): {"evidence": [1, 2, 9]}}
+    out = probes.positions(eps, labels)
+    assert out["by_band"]["12-16k"]["middle"] == 0.0 and out["rule_fires"] is True
+    labels[("a", "q")]["evidence"] = [1, 2, 9]  # the short band skips the middle too: not a length effect
+    assert probes.positions(eps, labels)["rule_fires"] is False

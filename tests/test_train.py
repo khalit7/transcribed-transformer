@@ -937,3 +937,35 @@ def test_check_questions_refuses_split_files_built_from_another_bank(tmp_path):
     (tmp_path / "benchmark_summary.json").unlink()
     with pytest.raises(SystemExit):
         check_questions(tmp_path)
+
+
+def test_no_shortcut_slices_drop_the_flagged_question_band_pairs(tmp_path):
+    from src.train.evaluate import _by_gold, shortcut_pairs
+    recs = [_v2_record("a", "q1", "none", "0-4k"), _v2_record("a", "q2", "one", "0-4k"),
+            _v2_record("b", "q1", "one", "12-16k"), _v2_record("b", "q2", "one", "12-16k")]
+    gold = {r["id"]: r for r in recs}
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"shortcut_prone": ["q1|0-4k"]}))
+    outs = [{"id": i, "variant": "clean", "prompt_tokens": 10,
+             "text": json.dumps({"evidence": [], "answer": "one", "summary": ""})} for i in gold]
+    res, _ = _by_gold(gold, outs, "label", shortcut=shortcut_pairs(report))
+    s = res["variants"]["clean"]
+    assert s["band=0-4k/cell=seen_q"]["n"] == 2 and s["band=0-4k/cell=seen_q/no_shortcut"]["n"] == 1
+    assert s["band=12-16k/cell=seen_q/no_shortcut"]["n"] == 2
+    plain, _ = _by_gold(gold, outs, "label")
+    assert not any("no_shortcut" in k for k in plain["variants"]["clean"])
+
+
+def test_tokenise_prompts_matches_one_call_in_any_chunking():
+    import numpy as np
+
+    from src.train.generate import tokenise_prompts
+
+    class Tok:
+        def __call__(self, texts):
+            return {"input_ids": [[2] + [len(w) for w in t.split()] for t in texts]}
+    pairs = [(f"id{i}", "messy", " ".join("x" * (j + 1) for j in range(i % 7))) for i in range(25)]
+    want = Tok()([p for _, _, p in pairs])["input_ids"]
+    for chunk in (1, 4, 1000):
+        got = tokenise_prompts(Tok(), pairs, chunk=chunk)
+        assert [list(g) for g in got] == want and all(g.dtype == np.int32 for g in got)

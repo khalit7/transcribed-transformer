@@ -197,7 +197,7 @@ def _floor(gold: dict, rows: list[dict], variant: str, gold_key: str, answer_of)
 
 
 def _slices(gold: dict, rows: list[dict], variant: str, gold_key: str, majority: dict, teacher_majority: dict | None = None,
-            band_majority: dict | None = None) -> dict:
+            band_majority: dict | None = None, shortcut_slices: bool = False) -> dict:
     """Every slice of one variant's rows under one gold: overall, dataset, family, cell (plus the held-out cell without the
     twinned questions), the transcript-blind floor, length buckets and the rare-event families per dataset."""
     slices: dict = {"overall": summarise(rows)}
@@ -236,6 +236,12 @@ def _slices(gold: dict, rows: list[dict], variant: str, gold_key: str, majority:
                 slices[f"band={band}/cell={cell}"] = summarise(sub)
                 slices[f"band={band}/cell={cell}/floor=majority_answer_in_band"] = _floor(
                     gold, sub, variant, gold_key, lambda r, b=band: band_majority[(r["qid"], b)])
+                if shortcut_slices:  # the pre-registered reading without the shortcut-prone (question, band) pairs
+                    clean = [r for r in sub if not r.get("shortcut")]
+                    if clean:
+                        slices[f"band={band}/cell={cell}/no_shortcut"] = summarise(clean)
+                        slices[f"band={band}/cell={cell}/no_shortcut/floor=majority_answer_in_band"] = _floor(
+                            gold, clean, variant, gold_key, lambda r, b=band: band_majority[(r["qid"], b)])
     # the floor: each question's majority gold answer, no transcript read, an empty evidence list and no tags, scored
     # exactly as a model output would be (so an empty key still matches empty gold); every number above is read against it
     slices["floor=majority_answer"] = _floor(gold, rows, variant, gold_key, lambda r: majority[r["qid"]])
@@ -285,7 +291,14 @@ def v2_gated(gold: dict, gold_key: str = "label") -> set[str]:
     return out
 
 
-def _by_gold(gold: dict, outs: list[dict], gold_key: str, teacher_majority: dict | None = None) -> tuple[dict, list[dict]]:
+def shortcut_pairs(probes_report: Path) -> set[tuple[str, str]]:
+    """(question id, band) pairs the v2 shortcut probes flagged (src.synthesis_v2.probes, report.json)."""
+    rep = json.loads(probes_report.read_text())
+    return {tuple(x.split("|", 1)) for x in rep["shortcut_prone"]}  # type: ignore[misc]
+
+
+def _by_gold(gold: dict, outs: list[dict], gold_key: str, teacher_majority: dict | None = None,
+             shortcut: set[tuple[str, str]] | None = None) -> tuple[dict, list[dict]]:
     """Per-variant slices under one gold, over the records that carry that label."""
     have = {i for i, r in gold.items() if r.get(gold_key)}
     rows = [score_pair(gold[o["id"]], o, gold_key) for o in outs if o["id"] in have]
@@ -317,10 +330,12 @@ def _by_gold(gold: dict, outs: list[dict], gold_key: str, teacher_majority: dict
              if gold_key == "label" and any(r["family"] == "podcast" for r in rows) else set())
     for r in rows:
         r["gated"] = r["id"] in gated
+        r["shortcut"] = (r["qid"], r.get("band")) in (shortcut or set())
     out: dict = {"n_pairs": len(have), "variants": {}}
     for variant in sorted({r["variant"] for r in rows}):
         vr = [r for r in rows if r["variant"] == variant]
-        out["variants"][variant] = _slices(gold, vr, variant, gold_key, majority, teacher_majority, band_majority)
+        out["variants"][variant] = _slices(gold, vr, variant, gold_key, majority, teacher_majority, band_majority,
+                                           shortcut is not None)
     return out, rows
 
 
@@ -340,7 +355,8 @@ def flag_over_cap(gold: dict, cap_tokens: int, tokenizer_dir: str) -> int:
     return n
 
 
-def evaluate(split: Path, outputs: Path, cap_tokens: int | None = None, tokenizer_dir: str | None = None) -> dict:
+def evaluate(split: Path, outputs: Path, cap_tokens: int | None = None, tokenizer_dir: str | None = None,
+             probes: Path | None = None) -> dict:
     from src.train.data import check_questions
     check_questions(split.parent)  # a v2 benchmark rebuilt from another bank or split is refused, as in training
     gold = {json.loads(l)["id"]: json.loads(l) for l in split.open()}
@@ -357,7 +373,7 @@ def evaluate(split: Path, outputs: Path, cap_tokens: int | None = None, tokenize
         raise SystemExit(f"{split}: {len(stale)} records carry a pre-D61 gold (provenance.method != teacher); rebuild the "
                          "benchmark with src.synthesis.benchmark before scoring")
     outs, seen = _load_outputs(gold, outputs)
-    teacher, rows = _by_gold(gold, outs, "label")
+    teacher, rows = _by_gold(gold, outs, "label", shortcut=shortcut_pairs(probes) if probes else None)
     result: dict = {"split": str(split), "outputs": str(outputs), "pairs_in_split": len(gold), "scored": len(rows),
                     "missing_outputs": len(rows) - len(seen),  # pairs scored as empty because no output had them
                     "gold": "teacher", "variants": teacher["variants"]}
@@ -450,8 +466,10 @@ def main() -> None:
     ap.add_argument("--wandb-prefix", default="bench/",
                     help="key prefix for the logged numbers; a checkpoint scored on a benchmark other than its own training "
                          "task (the zero-shot transfer scores) logs under its own prefix so the run's bench/ keys stay its own")
+    ap.add_argument("--probes", type=Path, default=None,
+                    help="labelled data v2: the shortcut-probe report (src.synthesis_v2.probes); adds no_shortcut slices")
     args = ap.parse_args()
-    result = evaluate(args.split, args.outputs, args.cap_tokens, args.tokenizer)
+    result = evaluate(args.split, args.outputs, args.cap_tokens, args.tokenizer, args.probes)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "metrics.json").write_text(json.dumps(result, indent=1))
     md = markdown(result)
