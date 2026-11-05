@@ -855,3 +855,85 @@ def test_flag_over_cap_counts_the_rendered_prompt(tmp_path, monkeypatch):
     gold = {f"doc-{n}::q-{n}": _doc_record(n, rid=f"doc-{n}::q-{n}") for n in (2, 400)}
     assert ev.flag_over_cap(gold, 1000, "ignored") == 1
     assert gold["doc-400::q-400"]["_over_cap"] == {"clean": True} and gold["doc-2::q-2"]["_over_cap"] == {"clean": False}
+
+
+def _v2_record(ep: str, qid: str, answer: str, band: str, cell: str = "seen_q", labels: list[str] | None = None) -> dict:
+    r = _doc_record(2, family="podcast", rid=f"sporc-{ep}::{qid}")
+    r["transcript"]["variants"][0]["lines"] = [f"{lab}: words here" for lab in (labels or ["host_1", "guest_1"])]
+    r["question"]["options"] = [{"value": v, "criteria": v} for v in ("none", "one", "two_plus")]
+    r["label"]["answer"] = answer
+    r["cell"] = cell
+    r["meta"] = {"stratum": band}
+    r["provenance"] = {"method": "teacher", "labels": {"claude:opus": answer}}
+    return r
+
+
+def test_v2_gates_band_slices_and_band_floors():
+    from src.train.evaluate import V2_NON_HOST_GATE, V2_STORY_GATE, _by_gold, v2_gated
+    per06, per05, _ = V2_STORY_GATE
+    recs = [_v2_record("a", per05, "none", "0-4k"), _v2_record("a", per06, "none", "0-4k", "unseen_q"),
+            _v2_record("b", per05, "one", "12-16k"), _v2_record("b", per06, "one", "12-16k", "unseen_q"),
+            _v2_record("a", V2_NON_HOST_GATE, "none", "0-4k", "unseen_q", labels=["host_1", "host_2"]),  # hosts only
+            _v2_record("b", V2_NON_HOST_GATE, "one", "12-16k", "unseen_q", labels=["host_1", "SPEAKER_03"])]
+    gold = {r["id"]: r for r in recs}
+    assert v2_gated(gold) == {f"sporc-a::{per06}", f"sporc-a::{V2_NON_HOST_GATE}"}
+    outs = [{"id": i, "variant": "clean", "prompt_tokens": 10,
+             "text": json.dumps({"evidence": [], "answer": "none", "summary": ""})} for i in gold]
+    res, _ = _by_gold(gold, outs, "label")
+    s = res["variants"]["clean"]
+    assert s["cell=unseen_q"]["n"] == 4 and s["cell=unseen_q_ungated"]["n"] == 2
+    assert s["band=0-4k"]["accuracy"] == 1.0 and s["band=12-16k"]["accuracy"] == 0.0  # "none" is right only in 0-4k
+    assert s["band=12-16k/floor=majority_answer_in_band"]["accuracy"] == 1.0  # the band's own majority is "one"
+    assert s["band=0-4k/cell=unseen_q"]["n"] == 2
+    del gold[f"sporc-a::{per05}"]  # the story gate needs per-05 on the same episode
+    with pytest.raises(SystemExit):
+        v2_gated(gold)
+
+
+def test_question_subset_keeps_k_questions_per_transcript_independent_of_order(tmp_path):
+    from src.train.data import question_subset
+    rows = [{"id": f"sporc-{ep}::q{q}"} for ep in ("a", "b", "c") for q in range(10)]
+    p1, p2 = tmp_path / "one.jsonl", tmp_path / "two.jsonl"
+    p1.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    p2.write_text("".join(json.dumps(r) + "\n" for r in reversed(rows)))
+    k3 = question_subset(p1, 3, seed=0)
+    assert k3 == question_subset(p2, 3, seed=0) and len(k3) == 9
+    assert all(sum(1 for i in k3 if i.startswith(f"sporc-{ep}::")) == 3 for ep in "abc")
+    assert k3 < question_subset(p1, 5, seed=0)  # a larger k keeps every pair a smaller one kept
+    assert k3 != question_subset(p1, 3, seed=1)
+
+
+def test_check_questions_refuses_split_files_built_from_another_bank(tmp_path):
+    import hashlib
+
+    from src.train.data import check_questions
+    check_questions(tmp_path)  # no summary: not a v2 split, nothing to check
+    (tmp_path / "questions.jsonl").write_text('{"id": "q1"}\n')
+    sha = hashlib.sha1((tmp_path / "questions.jsonl").read_bytes()).hexdigest()
+    (tmp_path / "benchmark_summary.json").write_text(json.dumps({"questions_sha1": sha}))
+    check_questions(tmp_path)  # not a v2 directory: the question hash alone is checked
+    (tmp_path / "questions.jsonl").write_text('{"id": "q2"}\n')
+    with pytest.raises(SystemExit):
+        check_questions(tmp_path)
+    # a v2 directory: every split file is tied to the summary, and the summary is required
+    (tmp_path / "questions.jsonl").write_text('{"id": "q1"}\n')
+    (tmp_path / "splits.json").write_text(json.dumps({"version": "v2", "created": "t1"}))
+    with pytest.raises(SystemExit):  # hashes of the split files missing
+        check_questions(tmp_path)
+    files = {}
+    for name in ("train.jsonl", "val.jsonl", "benchmark.jsonl"):
+        (tmp_path / name).write_text(name)
+        files[name] = hashlib.sha1(name.encode()).hexdigest()
+    (tmp_path / "benchmark_summary.json").write_text(json.dumps({"questions_sha1": sha, "files_sha1": files,
+                                                                  "splits_created": "t0"}))
+    with pytest.raises(SystemExit):  # files built from an earlier splits.json
+        check_questions(tmp_path)
+    (tmp_path / "benchmark_summary.json").write_text(json.dumps({"questions_sha1": sha, "files_sha1": files,
+                                                                  "splits_created": "t1"}))
+    check_questions(tmp_path)
+    (tmp_path / "train.jsonl").write_text("a stale train file")
+    with pytest.raises(SystemExit):
+        check_questions(tmp_path)
+    (tmp_path / "benchmark_summary.json").unlink()
+    with pytest.raises(SystemExit):
+        check_questions(tmp_path)

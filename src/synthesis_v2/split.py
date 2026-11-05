@@ -38,8 +38,8 @@ Rules (owner's decision 2026-11-05, D84, after three independent reviews of the 
 - The benchmark of each band is the best of DRAWS seeded draws refined by SWAPS single-episode swaps, scored on how far
   its category and length/density cell shares are from the band's eligible pool, plus a floor on rare answers: every
   (question, answer) class gets at least min(RARE_FLOOR, pool count // 2) benchmark episodes where the pool allows. The
-  floor over-represents the rarest classes (measured up to about 2.4 times their pool share where it binds; a class of one
-  or two in the pool can show a larger ratio by chance); the report lists every class it
+  floor over-represents the rarest classes (measured up to about 2.2 times their pool share where it
+  binds; a class of one or two in the pool can show a larger ratio by chance); the report lists every class it
   inflates by RARE_REPORT or more, so benchmark class rates are never quoted as population rates.
 - Val is a seeded random draw from the band's remaining eligible episodes; it is for checkpoint selection only and is
   never reported.

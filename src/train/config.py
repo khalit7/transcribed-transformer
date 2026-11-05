@@ -18,6 +18,10 @@ class DataConfig(BaseModel):
     # a record longer than max_seq_len: drop (the compliance data, whose evidence lines could fall in a cut) or truncate
     # the document from the tail so its head is read (the transfer datasets, which carry no evidence; data.fit_prompt)
     overlong: Literal["drop", "truncate"] = "drop"
+    # train side only: keep this many questions per transcript (a seeded, fixed choice; data.question_subset), which is how
+    # a run's compute is capped on data with many questions per transcript (labelled data v2); None keeps every record
+    questions_per_episode: int | None = None
+    question_seed: int = 0
 
 
 class ModelConfig(BaseModel):

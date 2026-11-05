@@ -36,6 +36,7 @@ from src.train.data import (
     build_corpus_examples,
     build_examples,
     build_transcript_examples,
+    check_questions,
     collate,
     collate_continuation,
     collate_encdec,
@@ -833,10 +834,15 @@ def main() -> None:
             va = build_transcript_examples(cfg.data.val, tok, ["labelled"], cfg.data.max_seq_len, cfg.data.cache_dir)
             return tr, va
         tr = build_examples(cfg.data.train, tok, cfg.data.variants, cfg.data.max_seq_len, cfg.data.cache_dir, limit=limit,
-                            overlong=cfg.data.overlong)
+                            overlong=cfg.data.overlong, questions_per_episode=cfg.data.questions_per_episode,
+                            question_seed=cfg.data.question_seed)
         va = build_examples(cfg.data.val, tok, ["labelled"], cfg.data.max_seq_len, cfg.data.cache_dir, overlong=cfg.data.overlong)
         return tr, va
 
+    # every rank, before any barrier, so a stale split stops all of them alike (labelled data v2); adaptation runs too,
+    # since they read the split to exclude labelled documents or train on its transcripts
+    for split_dir in sorted({cfg.data.train.parent, cfg.data.val.parent}):
+        check_questions(split_dir)
     if rank == 0:  # rank 0 tokenises and writes the cache; the others wait and read it
         (train, tstats), (val, vstats) = data()
     if dist.is_initialized():

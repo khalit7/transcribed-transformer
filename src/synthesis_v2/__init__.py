@@ -24,6 +24,17 @@ def numbered(lines: list[str]) -> str:
     return "\n".join(out)
 
 
+def file_sha1(path: Path) -> str:
+    """SHA-1 of a file, read in blocks (the v2 split files are several GB)."""
+    import hashlib
+
+    h = hashlib.sha1()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 24), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def read_jsonl(path: Path) -> list[dict]:
     """Every parseable line of a JSONL file. A truncated final line (a crash mid-write) is skipped with a warning
     instead of raising, so a resumed run can carry on; `append_jsonl` repairs the file on the next write."""

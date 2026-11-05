@@ -35,6 +35,13 @@ TWINNED_HELD_OUT = {
     "tm-23-explicit-consent", "aci-75-empathy-statement", "spk-36-question-dodged", "spk-29-personal-disclosure",
     "gen-02-account-holder", "gen-55-date-of-birth", "gen-07-needs-established", "spk-35-audience-assumed", "tm-29-preference-honoured",
 }
+# Labelled data v2 (podcast family). Its one held-out twin (per-03, answerable from trained per-05) moved to training
+# before the split was frozen (twin audit, 2026-11-05), so `unseen_q_no_twin` equals `unseen_q` on v2 by design. Two
+# held-out questions share a gate with trained questions: their `none` answer is settled by a trained question's answer
+# or by the speaker structure. `cell=unseen_q_ungated` scores the held-out cell without those gated pairs: per-06 only on
+# episodes with a story (gold per-05 is not `none`), nam-02 only on episodes with a rendered speaker who is not a host.
+V2_STORY_GATE = ("v2-per-06-story-questioned", "v2-per-05-storytellers", "none")
+V2_NON_HOST_GATE = "v2-nam-02-name-taken-up"
 BUCKETS = [(0, 2048, "<=2k"), (2048, 4096, "2-4k"), (4096, 8192, "4-8k"), (8192, 16384, "8-16k"), (16384, 10**9, ">16k")]
 
 
@@ -90,6 +97,7 @@ def score_pair(r: dict, out: dict, gold_key: str = "label") -> dict:
             tag_j = 0.0
     return {"id": r["id"], "variant": out["variant"], "dataset": r["dataset"], "track": r["track"], "family": q["family"],
             "qid": q["id"], "cell": r.get("cell", "seen_q"), "prompt_tokens": out.get("prompt_tokens"), "gold_key": gold_key,
+            "band": (r.get("meta") or {}).get("stratum"),  # v2's length band (the selection's), absent elsewhere
             "difficult": (r.get("meta") or {}).get("difficult"), "over_cap": (r.get("_over_cap") or {}).get(out["variant"]),
             # a recovered answer is a failure with partial credit (`credit`), never a correct prediction: the answer
             # metrics see it as invalid, `pred_raw` keeps what it would have been
@@ -177,7 +185,19 @@ def _load_outputs(gold: dict, outputs: Path) -> tuple[list[dict], set[tuple[str,
     return outs, seen
 
 
-def _slices(gold: dict, rows: list[dict], variant: str, gold_key: str, majority: dict, teacher_majority: dict | None = None) -> dict:
+def _floor(gold: dict, rows: list[dict], variant: str, gold_key: str, answer_of) -> dict:
+    """The transcript-blind floor over `rows`: `answer_of(row)` as the answer, an empty evidence list and no tags, scored
+    exactly as a model output would be."""
+    f_rows = [score_pair(gold[r["id"]], {"variant": variant, "prompt_tokens": r["prompt_tokens"],
+                                         "text": json.dumps({"evidence": [], "answer": answer_of(r), "summary": "", "tags": []})},
+                         gold_key) for r in rows]
+    for f_, r in zip(f_rows, rows):
+        f_["majority"] = answer_of(r)
+    return summarise(f_rows)
+
+
+def _slices(gold: dict, rows: list[dict], variant: str, gold_key: str, majority: dict, teacher_majority: dict | None = None,
+            band_majority: dict | None = None) -> dict:
     """Every slice of one variant's rows under one gold: overall, dataset, family, cell (plus the held-out cell without the
     twinned questions), the transcript-blind floor, length buckets and the rare-event families per dataset."""
     slices: dict = {"overall": summarise(rows)}
@@ -197,14 +217,28 @@ def _slices(gold: dict, rows: list[dict], variant: str, gold_key: str, majority:
     no_twin = [r for r in rows if r["cell"] == "unseen_q" and r["qid"] not in TWINNED_HELD_OUT]
     if no_twin:
         slices["cell=unseen_q_no_twin"] = summarise(no_twin)
+    if any(r.get("gated") for r in rows):  # v2: the held-out cell without the pairs a trained gate settles
+        slices["cell=unseen_q_ungated"] = summarise([r for r in no_twin if not r.get("gated")])
+    if band_majority and len(qids) > MAX_QID_SLICES:  # v2: too many questions for every one, but its 12 held-out ones are each a claim
+        for qid in sorted({r["qid"] for r in rows if r["cell"] == "unseen_q"}):
+            sub = [r for r in rows if r["qid"] == qid]
+            slices[f"qid={qid}"] = summarise(sub)
+            if any(r.get("gated") for r in sub):
+                slices[f"qid={qid}/ungated"] = summarise([r for r in sub if not r.get("gated")])
+    if band_majority:  # v2's length bands: every band, every band by cell, and the floor of each from its own majorities
+        for band in sorted({r["band"] for r in rows if r.get("band")}):
+            in_band = [r for r in rows if r.get("band") == band]
+            slices[f"band={band}"] = summarise(in_band)
+            slices[f"band={band}/floor=majority_answer_in_band"] = _floor(
+                gold, in_band, variant, gold_key, lambda r, b=band: band_majority[(r["qid"], b)])
+            for cell in sorted({r["cell"] for r in in_band}):
+                sub = [r for r in in_band if r["cell"] == cell]
+                slices[f"band={band}/cell={cell}"] = summarise(sub)
+                slices[f"band={band}/cell={cell}/floor=majority_answer_in_band"] = _floor(
+                    gold, sub, variant, gold_key, lambda r, b=band: band_majority[(r["qid"], b)])
     # the floor: each question's majority gold answer, no transcript read, an empty evidence list and no tags, scored
     # exactly as a model output would be (so an empty key still matches empty gold); every number above is read against it
-    floor_rows = [score_pair(gold[r["id"]], {"variant": variant, "prompt_tokens": r["prompt_tokens"],
-                                             "text": json.dumps({"evidence": [], "answer": r["majority"], "summary": "", "tags": []})},
-                             gold_key) for r in rows]
-    for f_ in floor_rows:
-        f_["majority"] = majority[f_["qid"]]
-    slices["floor=majority_answer"] = summarise(floor_rows)
+    slices["floor=majority_answer"] = _floor(gold, rows, variant, gold_key, lambda r: majority[r["qid"]])
     if teacher_majority is not None:  # on the Opus subset, the teacher's own majority answers: the floor an imitator of the teacher gets
         t_rows = [score_pair(gold[r["id"]], {"variant": variant, "prompt_tokens": r["prompt_tokens"],
                                              "text": json.dumps({"evidence": [], "answer": teacher_majority[r["qid"]], "summary": "", "tags": []})},
@@ -229,6 +263,28 @@ def _majority(answers: list[str]) -> str:
     return min(counts, key=lambda a: (-counts[a], a))
 
 
+def v2_gated(gold: dict, gold_key: str = "label") -> set[str]:
+    """Record ids of v2 held-out pairs whose answer a trained question or the speaker structure already settles (see
+    V2_STORY_GATE, V2_NON_HOST_GATE): per-06 on an episode whose gold per-05 is `none`, nam-02 on an episode where every
+    rendered speaker label is `host_*`. Empty on other datasets."""
+    held_q, gate_q, gate_none = V2_STORY_GATE
+    out = set()
+    for i, r in gold.items():
+        qid = r["question"]["id"]
+        ep = i.split("::")[0]
+        if qid == held_q:
+            g = gold.get(f"{ep}::{gate_q}")
+            if g is None:
+                raise SystemExit(f"{i}: the story gate needs {gate_q} on the same episode, which the split does not hold")
+            if (g.get(gold_key) or {}).get("answer") == gate_none:
+                out.add(i)
+        elif qid == V2_NON_HOST_GATE:  # the speakers the model sees: every line's label, as rendered
+            labels = {ln.partition(": ")[0] for ln in r["transcript"]["variants"][0]["lines"]}
+            if labels and all(lab.startswith("host_") for lab in labels):
+                out.add(i)
+    return out
+
+
 def _by_gold(gold: dict, outs: list[dict], gold_key: str, teacher_majority: dict | None = None) -> tuple[dict, list[dict]]:
     """Per-variant slices under one gold, over the records that carry that label."""
     have = {i for i, r in gold.items() if r.get(gold_key)}
@@ -251,10 +307,20 @@ def _by_gold(gold: dict, outs: list[dict], gold_key: str, teacher_majority: dict
                 majority[qid] = _majority(by_opts[tuple(o["value"] for o in gold[i]["question"]["options"])])
     for r in rows:
         r["majority"] = majority[r["qid"]]
+    # v2: the answer mix shifts with length, so each band also gets a floor from each question's majority within the band
+    band_majority = {(qid, band): _majority([gold[i][gold_key]["answer"] for i in have if gold[i]["question"]["id"] == qid
+                                             and (gold[i].get("meta") or {}).get("stratum") == band])
+                     for qid, band in {(gold[i]["question"]["id"], (gold[i].get("meta") or {}).get("stratum")) for i in have}
+                     if band is not None}
+    # gating reads the headline gold (a second gold on a subset need not hold the gating question's label)
+    gated = (v2_gated({i: gold[i] for i in have}, gold_key)
+             if gold_key == "label" and any(r["family"] == "podcast" for r in rows) else set())
+    for r in rows:
+        r["gated"] = r["id"] in gated
     out: dict = {"n_pairs": len(have), "variants": {}}
     for variant in sorted({r["variant"] for r in rows}):
         vr = [r for r in rows if r["variant"] == variant]
-        out["variants"][variant] = _slices(gold, vr, variant, gold_key, majority, teacher_majority)
+        out["variants"][variant] = _slices(gold, vr, variant, gold_key, majority, teacher_majority, band_majority)
     return out, rows
 
 
@@ -275,6 +341,8 @@ def flag_over_cap(gold: dict, cap_tokens: int, tokenizer_dir: str) -> int:
 
 
 def evaluate(split: Path, outputs: Path, cap_tokens: int | None = None, tokenizer_dir: str | None = None) -> dict:
+    from src.train.data import check_questions
+    check_questions(split.parent)  # a v2 benchmark rebuilt from another bank or split is refused, as in training
     gold = {json.loads(l)["id"]: json.loads(l) for l in split.open()}
     if cap_tokens:
         if not tokenizer_dir:

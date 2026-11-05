@@ -24,7 +24,7 @@ from pathlib import Path
 
 from src.synthesis.label import dumps
 from src.synthesis.schema import BenchmarkRecord, Label, LabelledRecord, Provenance
-from src.synthesis_v2 import OUT_DIR
+from src.synthesis_v2 import OUT_DIR, file_sha1
 from src.synthesis_v2.split import (
     LEDGER,
     QUESTIONS,
@@ -112,8 +112,10 @@ def main() -> None:
     splits = load_splits(args.splits)
     counts = build(args.ledger, splits)
     import hashlib
+
     summary = {"splits_created": splits["created"], "seed": splits["seed"], "pairs": counts,
                "questions_sha1": hashlib.sha1(QUESTIONS.read_bytes()).hexdigest(),
+               "files_sha1": {p.name: file_sha1(p) for p in OUTS.values()},  # training checks these (src.train.data.check_questions)
                "episodes": dict(collections.Counter(splits["episodes"].values()))}
     (OUTS["benchmark"].parent / "benchmark_summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary, indent=1))

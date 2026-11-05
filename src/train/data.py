@@ -24,6 +24,7 @@ import torch
 from src import prompts
 from src.synthesis.label import numbered
 from src.synthesis.schema import Label, Question
+from src.synthesis_v2 import file_sha1
 from src.synthesis_v2 import numbered as numbered_v2
 
 SEP = "\n\n"
@@ -123,17 +124,82 @@ def _variants_of(r: dict, requested: list[str]) -> list[str]:
     return out
 
 
+_RECORD_ID = re.compile(r'"id"\s*:\s*"([^"]+)"')
+
+
+def question_subset(path: Path, k: int, seed: int) -> set[str]:
+    """The record ids kept when each transcript contributes only `k` of its questions: per transcript (the id's part
+    before `::`), the k question ids with the smallest seeded hash. Fixed by (seed, transcript, question), so the choice
+    does not depend on file order, and a larger k keeps every pair a smaller one kept. Caps a run's compute where every
+    transcript carries many questions (labelled data v2: 32 trained questions per episode) while keeping every transcript."""
+    by_doc: dict[str, list[str]] = {}
+    with path.open() as f:
+        for line in f:
+            rid = _RECORD_ID.search(line[:300]).group(1)  # type: ignore[union-attr]
+            by_doc.setdefault(rid.split("::")[0], []).append(rid)
+    keep: set[str] = set()
+    for doc, rids in by_doc.items():
+        ranked = sorted(rids, key=lambda rid: hashlib.sha1(f"{seed}|{doc}|{rid.split('::', 1)[1]}".encode()).hexdigest())
+        keep.update(ranked[:k])
+    return keep
+
+
+def check_questions(split_dir: Path) -> None:
+    """Refuse to train on split files out of step with their build (labelled data v2): `benchmark_summary.json` records the
+    hash of the `questions.jsonl` they were built against and of each of train / val / benchmark.jsonl, and every one must
+    match. A v2 directory (one with a v2 `splits.json`) must have the summary; other directories (v1, ECtHR) are not checked."""
+    summary = split_dir / "benchmark_summary.json"
+    splits = split_dir / "splits.json"
+    is_v2 = splits.exists() and json.loads(splits.read_text()).get("version") == "v2"
+    if not summary.exists():
+        if is_v2:
+            raise SystemExit(f"{split_dir}: a v2 split without benchmark_summary.json; rebuild (python -m src.synthesis_v2.benchmark)")
+        return
+    s = json.loads(summary.read_text())
+    if "questions_sha1" not in s:
+        if is_v2:
+            raise SystemExit(f"{split_dir}: benchmark_summary.json records no hashes; rebuild (python -m src.synthesis_v2.benchmark)")
+        return
+    if is_v2 and s.get("splits_created") != json.loads(splits.read_text()).get("created"):
+        raise SystemExit(f"{split_dir}: the split files were built from an earlier splits.json; rebuild (python -m src.synthesis_v2.benchmark)")
+    want = {"questions.jsonl": s["questions_sha1"], **(s.get("files_sha1") or {})}
+    if is_v2 and set(want) != {"questions.jsonl", "train.jsonl", "val.jsonl", "benchmark.jsonl"}:
+        raise SystemExit(f"{split_dir}: benchmark_summary.json lacks the split files' hashes; rebuild (python -m src.synthesis_v2.benchmark)")
+    for name, sha in want.items():
+        have = file_sha1(split_dir / name)
+        if have != sha:
+            raise SystemExit(f"{split_dir}: {name} ({have[:8]}) differs from the one the split was built with ({sha[:8]}); "
+                             "rebuild (python -m src.synthesis_v2.benchmark)")
+
+
+def _render_digest() -> str:
+    """Everything that shapes a rendered prompt or target beyond the record itself: every template file in both prompt
+    folders (the v2 shared definitions included) and the source of the functions that number lines and assemble the
+    prompt and target. A change to any of them must miss the example cache, or training and evaluation would see
+    different text."""
+    import inspect
+
+    from src.synthesis_v2 import question_bank
+    files = sorted([*prompts.V1.glob("*.txt"), *prompts.V2.glob("*.txt")])
+    funcs = (numbered, *NUMBERING.values(), task_prompt, target_text, record_prompt, record_lines, prompt_template,
+             fit_prompt, _variants_of, prompts.render, question_bank.with_definitions)
+    src = "".join(inspect.getsource(f) for f in funcs)
+    return hashlib.sha1((prompts.digest(*files) + src).encode()).hexdigest()[:12]
+
+
 def build_examples(path: Path, tokenizer, variants: list[str], max_seq_len: int,
                    cache_dir: Path | None = None, limit: int | None = None,
-                   overlong: str = "drop") -> tuple[list[Example], dict]:
+                   overlong: str = "drop", questions_per_episode: int | None = None,
+                   question_seed: int = 0) -> tuple[list[Example], dict]:
     """Tokenised examples for one side of the split, every record whatever its licence track (training is
     research-only; the tracks govern the labelled-data release, not what a model may see). Cached by
     content as one flat int32 tensor plus offsets; prompts are tokenised in chunks so the text never
     sits in memory all at once. A record whose prompt, target and eos exceed max_seq_len is dropped
-    (`overlong="drop"`, the compliance data) or has its document cut to fit (`"truncate"`, see fit_prompt)."""
+    (`overlong="drop"`, the compliance data) or has its document cut to fit (`"truncate"`, see fit_prompt).
+    `questions_per_episode`: keep only that many questions per transcript (question_subset), None keeps every record."""
     templates = prompts.digest(PROMPT_DEFAULT, *PROMPT_TEMPLATES.values())  # a changed prompt file invalidates the cache
     key = hashlib.sha1(f"{path}|{path.stat().st_mtime_ns}|{tokenizer.name_or_path}|{variants}|{max_seq_len}|{limit}|{overlong}|{templates}"
-                       .encode()).hexdigest()[:16]
+                       f"|{_render_digest()}|{questions_per_episode}|{question_seed}".encode()).hexdigest()[:16]
     cache = (cache_dir / f"{path.stem}-{key}.pt") if cache_dir else None
     if cache and cache.exists():
         return _load_cache(cache)
@@ -165,8 +231,11 @@ def build_examples(path: Path, tokenizer, variants: list[str], max_seq_len: int,
             examples.append(Example(id=id_, variant=v, input_ids=np.asarray(ip + it + [eos], dtype=np.int32), n_prompt=len(ip)))
         pending.clear()
 
+    keep = question_subset(path, questions_per_episode, question_seed) if questions_per_episode else None
     n_seen = 0
     for line in path.open():
+        if keep is not None and _RECORD_ID.search(line[:300]).group(1) not in keep:  # type: ignore[union-attr]
+            continue
         r = json.loads(line)
         q = Question.model_validate(r["question"])
         tgt = target_text(Label.model_validate(r["label"]), q)
@@ -179,6 +248,7 @@ def build_examples(path: Path, tokenizer, variants: list[str], max_seq_len: int,
             break
     flush()
     stats = {"examples": len(examples), "dropped_too_long": dropped, "truncated": truncated,
+             "questions_per_episode": questions_per_episode, "question_seed": question_seed,
              "prompt_tokens": sum(e.n_prompt for e in examples), "target_tokens": sum(e.n_target for e in examples),
              "max_len": max((len(e.input_ids) for e in examples), default=0)}
     if cache:
