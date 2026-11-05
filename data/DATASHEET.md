@@ -109,7 +109,7 @@ Found by the benchmark-construction and whole-codebase audits of 2026-09-29 and 
 - **Rare-event families** have 21 to 32 gold positives per detection question under gold = teacher (AppTek: dissatisfaction 32, vulnerability present 26, complaint 21; SPoRC vulnerability disclosed 23), and 0 to 7 on Taskmaster and ACI-Bench; no rare-event claim is possible on those two corpora.
 - **AppTek as training text.** 72% of training pairs are AppTek calls although the card states an evaluation-only intent and this sheet's row says "never training text": that row describes the corpus's role as pretraining text (it is not packed), and the labelled pairs built on its calls are used for the research-only fine-tune, a decision recorded here rather than reversed. No call is shared between splits.
 
-## Labelled data v2 (long podcast episodes; pool built 2026-10-30, labels TBD)
+## Labelled data v2 (long podcast episodes; labelled 2026-11-02 to 2026-11-05, split frozen 2026-11-05)
 
 The second iteration of the labelled data, kept apart from v1 in every file: records under `data/labelled_data_v2/`
 (`episodes.jsonl` the episode pool, `questions.jsonl` the bank, then the ledger, splits and `train/val/benchmark.jsonl`
@@ -167,7 +167,26 @@ stay listed in the bank file as `REMOVED`; per-question tables in `data/labelled
 `report_r4b.md` and `report_r5.md`. Speaker roles are identified for all 6,120
 in-cap episodes (2026-11-01: 430 from SPoRC's own labels where complete, the rest by Sonnet; the pool was topped up by 120
 episodes with a second seed so that every in-cap stratum holds at least 2,000 conversations the identifier accepts):
-6,010 buildable conversations, 2,004 / 2,004 / 2,002 by stratum; pool 7,120 episodes including the parked 16-32k stratum. **Pilot (2026-10-31):** 117 episodes (40 per in-cap stratum drawn, 3 without an identifiable host), one Opus pass (the gold, 4,139 labels, $112.86 as the CLI reports it) and one Sonnet pass (4,139 labels, $55.31), seven questions per call. Bank-mean Opus-against-Sonnet kappa by stratum 0.678 / 0.709 / 0.671 (the pre-registered stop rule, under 0.40 at 8–16k or 0.20 below 2–4k, did not fire). 23 questions survive the pre-registered cut rules, 13 are cut (7 for agreement under 0.40 in a stratum, 6 for `none` or one answer above the skew thresholds), 1 is unmeasurable; per-question table in `data/labelled_data_v2/pilot/report.md`. **Production labelling (2026-11-02):** all 6,000 selected episodes x 44 questions by Opus through one lean `claude -p` call per episode (all questions at once, shared definitions printed once, minimal system prompt, no tools, no prompt caching), into `labelled_data.jsonl`; on 60 pilot episodes this route agreed with the pilot's Opus labels at 0.916 against Opus's own run-to-run 0.914, at 6.4x lower cost (see the v2 experiment record). In progress; not yet complete.
+6,010 buildable conversations, 2,004 / 2,004 / 2,002 by stratum; pool 7,120 episodes including the parked 16-32k stratum. **Pilot (2026-10-31):** 117 episodes (40 per in-cap stratum drawn, 3 without an identifiable host), one Opus pass (the gold, 4,139 labels, $112.86 as the CLI reports it) and one Sonnet pass (4,139 labels, $55.31), seven questions per call. Bank-mean Opus-against-Sonnet kappa by stratum 0.678 / 0.709 / 0.671 (the pre-registered stop rule, under 0.40 at 8–16k or 0.20 below 2–4k, did not fire). 23 questions survive the pre-registered cut rules, 13 are cut (7 for agreement under 0.40 in a stratum, 6 for `none` or one answer above the skew thresholds), 1 is unmeasurable; per-question table in `data/labelled_data_v2/pilot/report.md`. **Production labelling (2026-11-02):** all 6,000 selected episodes x 44 questions by Opus through one lean `claude -p` call per episode (all questions at once, shared definitions printed once, minimal system prompt, no tools, no prompt caching), into `labelled_data.jsonl`; on 60 pilot episodes this route agreed with the pilot's Opus labels at 0.916 against Opus's own run-to-run 0.914, at 6.4x lower cost (see the v2 experiment record). Complete on 2026-11-05: 264,000 labels, none missing.
+
+**Held-out set revised (2026-11-05).** An audit over all labels found held-out per-03 ("story answered")
+answerable from trained per-05 on 71% of episodes, so per-03 moved to training and agr-01 ("agreement stated"), the
+trained question least predictable from the others, is held out in its place: still 32 trained and 12 held out.
+
+**Split (2026-11-05, `src/synthesis_v2/split.py`, seed 0; `splits.json`).** By episode, 1,150 train / 50 val / 300
+benchmark per band: `train.jsonl` 4,600 episodes, 147,200 pairs (trained questions only); `val.jsonl` 200 episodes, 6,400
+pairs; `benchmark.jsonl` 1,200 episodes, 52,800 pairs (38,400 trained-question, 14,400 held-out, `cell` marks which).
+Val and benchmark come only from episodes with no link (feed id, show title, episode title and duration, host name,
+iTunes owner or author, transcript text) to another selected episode, to the episodes the question bank was written
+against, to any SPoRC document the earlier adaptation stages read, or to v1's labelled SPoRC episodes. Every benchmark
+pair carries Opus's label as `label` (`provenance.method` `teacher`, as in v1, since the training labeller is the gold).
+`benchmark_summary.json` holds the pair counts, the `splits.json` the files were built from, and the hashes of
+`questions.jsonl` and of the three split files; training and evaluation refuse files that no longer match.
+
+**Known limitations of the split.** The benchmark holds no show from a network whose owner name has two or more words and
+few shows with several episodes, since those connect to something in train; it leans to single-feed, smaller shows. The
+rare-answer floor of the benchmark draw over-represents the rarest answer classes (up to about 2.2 times, where it binds, their share of
+the eligible pool; the split report lists them), so benchmark class rates are not population rates.
 
 **Known limitations, recorded before labelling.** Diarisation: in a 600-episode sample the median episode has 38% of
 its lines at two words or fewer, lines can hold two speakers' words, and tags swap; evidence line numbers inherit that

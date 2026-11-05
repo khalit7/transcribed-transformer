@@ -1,8 +1,24 @@
 # Labelled data v2: long podcast episodes, and the capacity grid on them
 
-**Status: bank approved and production labelling of all 6,000 episodes complete (264,000 labels, 2026-11-05); the grid is not yet
-pre-registered. Everything below the Pilot section was written before the pilot ran; the pilot's measured results are
-filled in from the files it writes, never from memory.**
+**Status: labelled (264,000 labels) and split (frozen 2026-11-05); configs for the 270M-decoder stage of the grid
+written, the grid not yet pre-registered, no arm trained. Everything below the Pilot section was written before the
+pilot ran; the pilot's measured results are filled in from the files it writes, never from memory. The sections are in
+the order the decisions were made, and later ones supersede earlier ones; "The dataset as used" below states the final
+state.**
+
+## The dataset as used (2026-11-05)
+
+- **Episodes:** 6,000 SPoRC podcast episodes (real Whisper ASR with diarisation, as distributed), 1,500 in each of four
+  length bands by Gemma 3 tokens of the rendered transcript: `0-4k`, `4-8k`, `8-12k`, `12-16k` (the top band stops at
+  14,808 so the longest prompt and its answer fit 16,384). None is a v1 episode or comes from a podcast title v1 used.
+- **Rendering:** one corpus turn per line, verbatim, `<n>. <speaker>:<utterance>`, hosts and guests renamed `host_N` /
+  `guest_N` by an identifier, other voices keeping their diarisation tag.
+- **Questions:** 44, every one asked of every episode in the same words; 32 trained, 12 held out of training as the
+  zero-shot cell. No question takes a per-episode argument.
+- **Gold:** Claude Opus, one call per episode answering all 44 questions, for train, val and benchmark alike: one gold and
+  one circularity statement (every arm is judged against Opus's reading). Opus agreed with itself on 0.914 of answers
+  between two runs, the noise floor under every comparison.
+- **Split:** 1,150 train / 50 val / 300 benchmark episodes per band (below, "The split").
 
 ## Why a second dataset
 
@@ -307,5 +323,95 @@ test: a lower thinking effort, which could cut up to about a quarter of the rema
 ## After the pilot
 
 The approved bank is 44 questions (32 trained, 12 held out; see above) and the labelled set the 6,000 selected episodes
-above (1,500 per stratum). The full pre-registration of the grid (hypothesis, predictions per stratum, arms, epoch
-pilot) is written here before the production labelling starts.
+above (1,500 per stratum). Production labelling finished on 2026-11-05: 264,000 labels, none missing, $1,718.72 of
+usage on the labels as the CLI reports it ($1,719.59 over all 6,132 calls, failed and retried calls included). The pre-registration of the grid was meant to come before production labelling and did
+not; it is written below before any arm trains.
+
+## The split (2026-11-05)
+
+I split by episode into 1,150 train, 50 val and 300 benchmark episodes in every band (4,600 / 200 / 1,200). At 300
+episodes per band the 95% half-width of an accuracy difference between two arms is about ±0.01 per band on the trained
+questions and about ±0.015 to ±0.02 on the held-out ones (*estimate*: it assumes the two arms disagree on a fifth of
+answers). Going to 350 per band would narrow that by about 0.001 to 0.002 at the cost of 200 training episodes, and a
+bigger benchmark buys little against Opus's own run-to-run disagreement, so compute goes to seeds before benchmark
+size. Val only selects checkpoints.
+
+Val and benchmark episodes are drawn only from episodes connected to nothing a model has trained on or the bank was
+written against. Episodes are linked into groups by any of: feed id, normalised show title, episode title with near-equal
+duration, a shared full host name, a shared iTunes owner or author name, and shared transcript text (sampled 8-word
+passages). Every group of more than one selected episode goes to train, and so does every group touching
+(a) the 236 episodes the question bank was drafted, probed and cut against, (b) every SPoRC document the earlier
+adaptation stages may have read, replayed exactly from their configs and verified against their cached samples (35,050
+documents), or (c) v1's 1,209 labelled SPoRC episodes. Of the 6,000, 575 had been read by an adaptation stage and 2,656
+sit in a group with such a document or a v1 episode; all are in train. Without this, about a tenth of the first draft's
+benchmark had been read during adaptation, and the same episode or show had reached both train and benchmark under
+different feed ids. `src/synthesis_v2/split.py` holds the rules. I checked the frozen split with leak audits written
+apart from its own code (other title normalisations, RSS and image URLs, descriptions, another passage hash) and found
+no val or benchmark episode connected to a trained-on, design or train show.
+
+The benchmark of each band is the best of 300 seeded draws refined by swaps, matched to the eligible pool on category and
+length/density cell, with a floor of min(10, pool count // 2) benchmark episodes for every (question, answer) class.
+Against the whole band, its category, cell and per-question answer mixes sit within the spread of a random 300 drawn from
+the band. Two leans are by construction and stated rather than corrected:
+
+- It holds no show from a network whose owner name has two or more words and few shows with several episodes: those are
+  all connected to something in train. Shows of one-word-owner station networks are not linked, and eight sister shows of
+  such networks with different hosts sit in val or benchmark.
+- The rare-answer floor over-represents the rarest classes, up to about 2.2 times their share of the eligible pool where the floor binds (a class of one or two
+  episodes can show a larger ratio by chance); the
+  split report lists each class it inflates by 1.25 times or more. Benchmark class rates are not population rates.
+
+| | Episodes | Label pairs |
+|---|---|---|
+| train | 4,600 | 147,200 (32 trained questions each) |
+| val | 200 | 6,400 |
+| benchmark | 1,200 | 52,800: 38,400 trained questions, 14,400 held out |
+
+The held-out questions' labels on train and val episodes (57,600 pairs) are not used. `splits.json` (seed 0) and the
+three files are in `data/labelled_data_v2/`; `benchmark_summary.json` records the hashes of the question file and of the
+three split files and the `splits.json` they were built from, and training and evaluation refuse files that no longer
+match.
+
+## The held-out set after a twin audit (2026-11-05)
+
+Before freezing the split I checked that no held-out question is a variation of a trained one, by reading the questions
+and by measuring, over all 264,000 labels, how well each trained question's answer predicts each held-out answer on the
+same episode. There was one twin: per-03 ("story answered") is a narrower version of trained
+per-05 ("storytellers"). Per-05's answer settles per-03's on 71% of episodes (best-mapping accuracy 0.860 against a 0.624
+majority baseline). I moved per-03 to training and held out agr-01 ("agreement stated") in its place, the trained question
+least predictable from the rest (the other trained questions add 0.009 over its 0.611 baseline) with the steadiest pilot
+agreement of the candidates (kappa 0.85 overall, at least 0.75 in every band). No label changed; still 32 trained and 12
+held out.
+
+Two held-out questions share a gate with training: per-06 ("story questioned") answers `none` exactly when trained
+per-05 does, and nam-02 ("name taken up") is partly settled by whether any speaker is not a host. The evaluator reports a
+`cell=unseen_q_ungated` slice without those gated pairs (per-06 only on episodes with a story, nam-02 only on episodes with
+a non-host speaker) beside the full held-out cell. The audit also bounds what the zero-shot cell can claim:
+every held-out answer format and many of the shared definitions also occur in trained questions, so it tests new
+triggers and relations over definitions and formats the model has seen, not unseen formats.
+
+## The grid, 270M-decoder stage (configs written 2026-11-05; pre-registration TBD)
+
+I run the grid in two stages by decoder size, starting with every arm whose decoder is Gemma 3 270M, so the first
+question answered is how much an encoder in front of the same small decoder helps, and whether that depends on input
+length. The 1B-decoder stage repeats it afterwards.
+
+| Run | Experiment | What it is |
+|---|---|---|
+| `e1-gemma3-270m-v2` | E1 | the decoder alone: the control for every E4 arm |
+| `e4-t5gemma2-270m-270m-v2` | E4 | native encoder-decoder, 270M encoder |
+| `e4mm-1b-enc-270m-dec-v2` | E4 | 1B T5Gemma 2 encoder stitched to the 270M decoder |
+| `e4mm-4b-enc-270m-dec-v2` | E4 | 4B encoder stitched to the 270M decoder |
+| `e1pp-gemma3-270m-v2` | E1++ | the decoder alone after the adaptation stage: the control for every E5 arm |
+| `e5pp-t5gemma2-270m-enc-gemma3-270m-v2` | E5++ | 270M encoder read as soft tokens by the decoder |
+| `e5pp-t5gemma2-1b-enc-gemma3-270m-v2` | E5++ | 1B encoder, soft tokens |
+| `e5pp-t5gemma2-4b-enc-gemma3-270m-v2` | E5++ | 4B encoder, soft tokens |
+
+The configs (`configs/v2/`, generated by `scripts/make_v2_configs.py`) copy each arm's compliance recipe and model block
+unchanged and change only the data, epochs and val interval. Each training episode contributes 8 of its 32 trained
+questions, a seeded choice fixed per episode, so every episode is kept while capping a run's compute: 36,800 examples,
+one epoch of 1,150 steps of 32, 318.0M tokens (316.4M prompt, 1.6M answer; Gemma 3 tokenizer, measured), longest
+example 15,626 tokens, none dropped for length. Val keeps all 6,400 pairs (none dropped), of which the trainer reads a
+fixed 512 for the val loss. Whether 8 questions and one epoch are enough is open; an
+epoch and question-count pilot on the E1 control is the cheapest way to find out and belongs in the pre-registration.
+Results: TBD.
